@@ -1,0 +1,42 @@
+{
+  "cli": {
+    "version": ">= 12.0.0",
+    "appVersionSource": "local",
+    "requireCommit": false
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_RC_KEY": "REPLACE_WITH_ANDROID_RC_KEY"
+      }
+    },
+    "production": {
+      "env": {
+        "EXPO_PUBLIC_RC_KEY": "REPLACE_WITH_ANDROID_RC_KEY"
+      },
+      "android": {
+        "buildType": "app-bundle",
+        "autoIncrement": true
+      }
+    }
+  },
+  "submit": {
+    "production": {
+      "android": {
+        "serviceAccountKeyPath": "./google-play-service-account.json",
+        "track": "internal"
+      }
+    }
+  }
+}
