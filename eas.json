@@ -16,15 +16,9 @@
       "distribution": "internal",
       "android": {
         "buildType": "apk"
-      },
-      "env": {
-        "EXPO_PUBLIC_RC_KEY": "REPLACE_WITH_ANDROID_RC_KEY"
       }
     },
     "production": {
-      "env": {
-        "EXPO_PUBLIC_RC_KEY": "REPLACE_WITH_ANDROID_RC_KEY"
-      },
       "android": {
         "buildType": "app-bundle",
         "autoIncrement": true
