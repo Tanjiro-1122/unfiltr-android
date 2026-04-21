@@ -9,9 +9,7 @@
     "userInterfaceStyle": "dark",
     "android": {
       "package": "com.huertas.unfiltr",
-      "versionCode": 9,
-      "targetSdkVersion": 35,
-      "compileSdkVersion": 35,
+      "versionCode": 11,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0f0f1a"
@@ -29,6 +27,16 @@
     },
     "plugins": [
       "expo-router",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "compileSdkVersion": 35,
+            "targetSdkVersion": 35,
+            "buildToolsVersion": "35.0.0"
+          }
+        }
+      ],
       [
         "expo-av",
         {
