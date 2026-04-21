@@ -10,5 +10,4 @@ dist/
 *.orig.*
 web-build/
 .env
-google-services.json
 google-play-service-account.json
