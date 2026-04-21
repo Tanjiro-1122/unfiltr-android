@@ -9,7 +9,7 @@
     "userInterfaceStyle": "dark",
     "android": {
       "package": "com.huertas.unfiltr",
-      "versionCode": 7,
+      "versionCode": 9,
       "targetSdkVersion": 35,
       "compileSdkVersion": 35,
       "adaptiveIcon": {

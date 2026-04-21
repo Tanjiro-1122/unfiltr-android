@@ -22,7 +22,11 @@
       "android": {
         "buildType": "app-bundle",
         "autoIncrement": true,
-        "gradleCommand": ":app:bundleRelease"
+        "gradleCommand": ":app:bundleRelease",
+        "buildEnvironment": {
+          "targetSdkVersion": 35,
+          "compileSdkVersion": 35
+        }
       }
     }
   },
