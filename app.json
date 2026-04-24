@@ -9,7 +9,7 @@
     "userInterfaceStyle": "dark",
     "android": {
       "package": "com.huertas.unfiltr",
-      "versionCode": 11,
+      "versionCode": 13,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0f0f1a"
