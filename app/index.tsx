@@ -22,7 +22,7 @@ const RC_API_KEY = process.env.EXPO_PUBLIC_RC_KEY ?? 'REPLACE_WITH_ANDROID_RC_KE
 
 // ─── Google OAuth Web Client ID (from Google Cloud Console) ──────────────────
 // Must be the WEB client ID (not Android), used for idToken generation
-const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? 'REPLACE_WITH_GOOGLE_WEB_CLIENT_ID';
+const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '1033825374489-l6l27elju2n2i0k5fug6jf0kb0rvvguh.apps.googleusercontent.com';
 
 const APP_URL    = 'https://unfiltrbyjavier2.vercel.app';
 const APP_ORIGIN = 'https://unfiltrbyjavier2.vercel.app';
