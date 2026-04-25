@@ -14,6 +14,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "1033825374489-5rulc0vc16mg0tt1cqsuoaq12bvd5rga.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.huertas.unfiltr",
+            "certificate_hash": "964a0e8a4754ea90a94caad3d6f11077c602cdfb"
+          }
+        },
+        {
           "client_id": "1033825374489-l6l27elju2n2i0k5fug6jf0kb0rvvguh.apps.googleusercontent.com",
           "client_type": 3
         }
