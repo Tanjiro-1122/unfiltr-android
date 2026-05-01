@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    name: Build & Submit Android AAB
+    name: Build Android AAB
     runs-on: ubuntu-latest
 
     steps:
@@ -34,41 +34,22 @@ jobs:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
 
-      - name: Write Google Play service account key
+      - name: Build Android AAB (EAS cloud)
+        run: eas build --platform android --profile production --non-interactive
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Setup service account for Play Store submission
         run: echo '${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_KEY }}' > google-play-service-account.json
 
-      - name: Trigger EAS build
-        run: eas build --platform android --profile production --non-interactive --no-wait
+      - name: Submit to Google Play (internal track)
+        run: eas submit --platform android --profile production --latest --non-interactive
+        continue-on-error: true
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
 
-      - name: Wait for build and submit
+      - name: Summary
         run: |
-          #!/bin/bash
-          set -e
-          echo "Polling for EAS build completion (timeout: 120 min)..."
-          for attempt in {1..240}; do
-            sleep 30
-            echo "[/240] Checking build status..."
-            
-            BUILD_JSON=$(eas build:list --platform android --limit 1 --json 2>&1)
-            STATUS=$(echo "$BUILD_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['status'] if d else 'UNKNOWN')" 2>/dev/null || echo "ERROR")
-            
-            echo "  Status: $STATUS"
-            
-            if [ "$STATUS" = "FINISHED" ]; then
-              echo "✓ Build finished! Submitting to Google Play..."
-              eas submit --platform android --profile production --latest --non-interactive
-              exit 0
-            fi
-            
-            if [ "$STATUS" = "ERRORED" ] || [ "$STATUS" = "CANCELED" ]; then
-              echo "✗ Build failed: $STATUS"
-              exit 1
-            fi
-          done
-          
-          echo "✗ Build timeout after 120 minutes"
-          exit 1
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          echo "✅ Android AAB build succeeded"
+          echo "📦 Next step: Service account needs Release Manager role in Play Console"
+          echo "📧 Service account: revenuecat-service-account@unfiltr-by-javier.iam.gserviceaccount.com"
