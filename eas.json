@@ -19,10 +19,13 @@
       }
     },
     "production": {
+      "env": {
+        "EXPO_PUBLIC_RC_KEY": "goog_wLoZn1dKzpmoBadvgGkJkQXzuQw",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "1033825374489-l6l27elju2n2i0k5fug6jf0kb0rvvguh.apps.googleusercontent.com"
+      },
       "android": {
         "buildType": "app-bundle",
-        "autoIncrement": true,
-        "gradleCommand": ":app:bundleRelease"
+        "autoIncrement": true
       }
     }
   },
