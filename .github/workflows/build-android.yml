@@ -37,11 +37,38 @@ jobs:
       - name: Write Google Play service account key
         run: echo '${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_KEY }}' > google-play-service-account.json
 
-      - name: Build & Submit to Google Play
+      - name: Trigger EAS build
+        run: eas build --platform android --profile production --non-interactive --no-wait
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Wait for build and submit
         run: |
-          echo "Building Android AAB..."
-          eas build --platform android --profile production --non-interactive
-          echo "Build complete. Submitting to Google Play..."
-          eas submit --platform android --profile production --latest --non-interactive
+          #!/bin/bash
+          set -e
+          echo "Polling for EAS build completion (timeout: 120 min)..."
+          for attempt in {1..240}; do
+            sleep 30
+            echo "[/240] Checking build status..."
+            
+            BUILD_JSON=$(eas build:list --platform android --limit 1 --json 2>&1)
+            STATUS=$(echo "$BUILD_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['status'] if d else 'UNKNOWN')" 2>/dev/null || echo "ERROR")
+            
+            echo "  Status: $STATUS"
+            
+            if [ "$STATUS" = "FINISHED" ]; then
+              echo "✓ Build finished! Submitting to Google Play..."
+              eas submit --platform android --profile production --latest --non-interactive
+              exit 0
+            fi
+            
+            if [ "$STATUS" = "ERRORED" ] || [ "$STATUS" = "CANCELED" ]; then
+              echo "✗ Build failed: $STATUS"
+              exit 1
+            fi
+          done
+          
+          echo "✗ Build timeout after 120 minutes"
+          exit 1
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
