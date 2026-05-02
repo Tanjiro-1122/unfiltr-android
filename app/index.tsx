@@ -82,6 +82,7 @@ export default function App() {
   const [loading, setLoading]       = useState(true);
   const [loadError, setLoadError]   = useState<string | null>(null);
   const [sessionData, setSessionData] = useState<Record<string, string> | null>(null);
+  const loadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ─── Load persisted session ──────────────────────────────────────────────
   useEffect(() => {
@@ -468,10 +469,20 @@ export default function App() {
       <WebView
         ref={webViewRef}
         source={{ uri: APP_URL }}
+        onLoadStart={() => {
+          if (loadTimeoutRef.current) clearTimeout(loadTimeoutRef.current);
+          loadTimeoutRef.current = setTimeout(() => {
+            setLoading(false);
+            setLoadError('Connection timed out. Please check your internet.');
+          }, 20000);
+        }}
         style={styles.webview}
         injectedJavaScriptBeforeContentLoaded={buildInjectedJS()}
         onMessage={handleWebMessage}
-        onLoadEnd={() => setLoading(false)}
+        onLoadEnd={() => {
+          setLoading(false);
+          if (loadTimeoutRef.current) clearTimeout(loadTimeoutRef.current);
+        }}
         onError={(e) => {
           setLoadError(e.nativeEvent.description);
           setLoading(false);
@@ -480,13 +491,22 @@ export default function App() {
         domStorageEnabled={true}
         allowsInlineMediaPlayback={true}
         mediaPlaybackRequiresUserAction={false}
-        startInLoadingState={false}
+        startInLoadingState={true}
         originWhitelist={['https://*', 'http://*']}
         allowsBackForwardNavigationGestures={false}
         userAgent="UnfiltrAndroid/1.0"
         onShouldStartLoadWithRequest={(request) => {
-          // Keep navigation within the app — block external redirects
-          return request.url.startsWith(APP_ORIGIN) || request.url === 'about:blank';
+          const url = request.url;
+          // Allow app origin, blank, data URIs, and Google auth flows
+          if (url.startsWith(APP_ORIGIN)) return true;
+          if (url === 'about:blank') return true;
+          if (url.startsWith('data:')) return true;
+          if (url.startsWith('https://accounts.google.com')) return true;
+          if (url.startsWith('https://oauth2.googleapis.com')) return true;
+          if (url.startsWith('https://www.googleapis.com')) return true;
+          if (url.includes('google') && url.includes('auth')) return true;
+          // Block everything else (external links etc)
+          return false;
         }}
       />
 
@@ -561,3 +581,5 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 });
+
+
