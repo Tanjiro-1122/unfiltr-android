@@ -18,6 +18,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: "npm"
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -26,13 +27,22 @@ jobs:
           java-version: "17"
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Setup EAS
         uses: expo/expo-github-action@v8
         with:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Inject RevenueCat Android key as EAS secret
+        run: |
+          trap 'rm -f /tmp/eas-secrets.env' EXIT INT TERM
+          printf 'EXPO_PUBLIC_RC_KEY=%s\n' "$ANDROID_RC_KEY" > /tmp/eas-secrets.env
+          eas secret:push --scope project --env-file /tmp/eas-secrets.env --force
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          ANDROID_RC_KEY: ${{ secrets.ANDROID_RC_KEY }}
 
       - name: Build Android AAB (EAS cloud)
         run: eas build --platform android --profile production --non-interactive

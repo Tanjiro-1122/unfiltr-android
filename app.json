@@ -22,7 +22,8 @@
         "WRITE_EXTERNAL_STORAGE",
         "VIBRATE",
         "RECEIVE_BOOT_COMPLETED",
-        "POST_NOTIFICATIONS"
+        "POST_NOTIFICATIONS",
+        "com.android.vending.BILLING"
       ]
     },
     "plugins": [
@@ -62,7 +63,8 @@
           "photosPermission": "Unfiltr accesses your photo library so you can share images with your companion."
         }
       ],
-      "@react-native-google-signin/google-signin"
+      "@react-native-google-signin/google-signin",
+      "react-native-purchases"
     ],
     "experiments": {
       "typedRoutes": true
