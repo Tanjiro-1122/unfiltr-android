@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { WebView } from 'react-native-webview';
 import {
   StyleSheet, View, ActivityIndicator, StatusBar,
-  Text, TouchableOpacity, Platform,
+  Text, TouchableOpacity,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -78,6 +78,8 @@ export default function App() {
   const rcInitPromiseRef   = useRef<Promise<void>>(Promise.resolve());
   const cachedOfferingsRef = useRef<PurchasesOfferings | null>(null);
   const googleSignInActiveRef = useRef<boolean>(false);
+  const rcInitStateRef     = useRef<{ ok: boolean; error?: string } | null>(null);
+  const rcReadySentRef     = useRef<boolean>(false);
 
   const [loading, setLoading]       = useState(true);
   const [loadError, setLoadError]   = useState<string | null>(null);
@@ -129,8 +131,10 @@ export default function App() {
       try {
         if (__DEV__) Purchases.setLogLevel(LOG_LEVEL.DEBUG);
         await Purchases.configure({ apiKey: RC_API_KEY });
+        rcInitStateRef.current = { ok: true };
         console.log('[RC] Configured for Android');
       } catch (e: any) {
+        rcInitStateRef.current = { ok: false, error: e.message };
         console.error('[RC] Init error:', e.message);
       }
     })();
@@ -429,7 +433,7 @@ export default function App() {
         break;
 
       default:
-        console.log('[BRIDGE] Unhandled message type:', msg.type);
+        console.warn('[BRIDGE] Unhandled message type:', msg.type, msg);
     }
   };
 
@@ -479,9 +483,21 @@ export default function App() {
         style={styles.webview}
         injectedJavaScriptBeforeContentLoaded={buildInjectedJS()}
         onMessage={handleWebMessage}
-        onLoadEnd={() => {
+        onLoadEnd={async () => {
           setLoading(false);
           if (loadTimeoutRef.current) clearTimeout(loadTimeoutRef.current);
+          // Signal RevenueCat billing readiness to the web app once after the initial
+          // page load. rcReadySentRef prevents duplicate signals if onLoadEnd fires
+          // again (e.g. for in-page navigations in some WebView versions).
+          if (!rcReadySentRef.current) {
+            rcReadySentRef.current = true;
+            await rcInitPromiseRef.current;
+            if (rcInitStateRef.current?.ok) {
+              sendToWeb({ type: 'RC_READY' });
+            } else if (rcInitStateRef.current) {
+              sendToWeb({ type: 'RC_INIT_FAILED', error: rcInitStateRef.current.error });
+            }
+          }
         }}
         onError={(e) => {
           setLoadError(e.nativeEvent.description);
@@ -505,7 +521,14 @@ export default function App() {
           if (url.startsWith('https://oauth2.googleapis.com')) return true;
           if (url.startsWith('https://www.googleapis.com')) return true;
           if (url.includes('google') && url.includes('auth')) return true;
+          // Allow Google Pay and Play Billing redirect URLs.
+          // Use anchored regex to prevent prefix-matching attacks like
+          // https://pay.google.com.evil.com — the path component must start with /
+          // or the URL must be exactly the origin.
+          if (/^https:\/\/pay\.google\.com(\/|$)/.test(url)) return true;
+          if (/^https:\/\/checkout\.google\.com(\/|$)/.test(url)) return true;
           // Block everything else (external links etc)
+          console.warn('[BRIDGE] Blocked navigation to:', url);
           return false;
         }}
       />

@@ -47,8 +47,8 @@ Copy the project ID shown → paste into `app.json` → `extra.eas.projectId`
 - In [RevenueCat dashboard](https://app.revenuecat.com) → **Apps** → **+ Add new app** → Android
 - Add your Google Play app (bundle: `com.huertas.unfiltr`)
 - Copy the **public SDK key** (starts with `goog_`)
-- Add to GitHub Secrets as `ANDROID_RC_KEY`
-- Update `eas.json` → replace `REPLACE_WITH_ANDROID_RC_KEY` with the actual key
+- Add to GitHub Secrets as `ANDROID_RC_KEY` — the CI workflow automatically injects it as an EAS secret before each build
+- **Do not** hardcode the key in `eas.json` — the `EXPO_PUBLIC_RC_KEY` value is injected securely at build time via EAS secrets; the app reads it at runtime via `process.env.EXPO_PUBLIC_RC_KEY` (see `app/index.tsx` line ~21)
 
 ### 4. Google Play setup
 - Open [Google Play Console](https://play.google.com/console)
@@ -76,7 +76,7 @@ Option B: Upload to the repo root (but add it to `.gitignore` first for security
 
 ## Build manually (once setup is done)
 ```bash
-npm install
+npm ci
 eas build --platform android --profile production
 ```
 
@@ -92,6 +92,26 @@ Messages the web app can send to the native wrapper:
 | `GET_OFFERINGS` | Fetch RevenueCat offerings |
 | `GET_CUSTOMER_INFO` | Get current customer/subscription info |
 | `SAVE_SESSION` | Persist session data to AsyncStorage |
+
+Messages the native wrapper sends back to the web app:
+
+| Type | Description |
+|------|-------------|
+| `RC_READY` | RevenueCat billing SDK initialised successfully — safe to show purchase UI |
+| `RC_INIT_FAILED` | RevenueCat SDK failed to initialise (`{ error }`) — purchase UI should be disabled |
+| `GOOGLE_SIGN_IN_SUCCESS` | Sign-in succeeded (`{ googleUserId, email, displayName, idToken, platform }`) |
+| `GOOGLE_SIGN_IN_CANCELLED` | User dismissed the sign-in sheet |
+| `GOOGLE_SIGN_IN_ERROR` | Sign-in error (`{ error }`) |
+| `GOOGLE_SIGN_OUT_SUCCESS` | Sign-out completed |
+| `PURCHASE_SUCCESS` | Purchase completed (`{ isPremium, plan, productId, customerInfo }`) |
+| `PURCHASE_CANCELLED` | User dismissed the purchase sheet |
+| `PURCHASE_ERROR` | Purchase error (`{ error }`) |
+| `RESTORE_SUCCESS` | Restore completed (`{ isPremium, customerInfo }`) |
+| `RESTORE_ERROR` | Restore error (`{ error }`) |
+| `OFFERINGS_RESULT` | Offerings fetched (`{ offerings }`) |
+| `OFFERINGS_ERROR` | Offerings fetch error (`{ error }`) |
+| `CUSTOMER_INFO_RESULT` | Customer info fetched (`{ isPremium, customerInfo }`) |
+| `CUSTOMER_INFO_ERROR` | Customer info fetch error (`{ error }`) |
 
 ---
 
