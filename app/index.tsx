@@ -17,8 +17,12 @@ import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 
 // ─── RevenueCat public SDK key for Android ────────────────────────────────────
-// Replace with your RevenueCat Android key from the dashboard
-const RC_API_KEY = process.env.EXPO_PUBLIC_RC_KEY ?? 'REPLACE_WITH_ANDROID_RC_KEY';
+// Injected at EAS build time via the EXPO_PUBLIC_RC_KEY environment variable.
+// In development / preview builds without the variable set, purchases will not work.
+const RC_API_KEY = process.env.EXPO_PUBLIC_RC_KEY ?? '';
+if (!RC_API_KEY) {
+  console.error('[RC] EXPO_PUBLIC_RC_KEY is not set — in-app purchases will not work.');
+}
 
 // ─── Google OAuth Web Client ID (from Google Cloud Console) ──────────────────
 // Must be the WEB client ID (not Android), used for idToken generation
@@ -520,7 +524,6 @@ export default function App() {
           if (url.startsWith('https://accounts.google.com')) return true;
           if (url.startsWith('https://oauth2.googleapis.com')) return true;
           if (url.startsWith('https://www.googleapis.com')) return true;
-          if (url.includes('google') && url.includes('auth')) return true;
           // Allow Google Pay and Play Billing redirect URLs.
           // Use anchored regex to prevent prefix-matching attacks like
           // https://pay.google.com.evil.com — the path component must start with /
@@ -547,6 +550,7 @@ export default function App() {
             onPress={() => {
               setLoadError(null);
               setLoading(true);
+              rcReadySentRef.current = false;
               webViewRef.current?.reload();
             }}
           >

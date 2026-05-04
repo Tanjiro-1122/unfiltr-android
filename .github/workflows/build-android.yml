@@ -50,7 +50,7 @@ jobs:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
 
       - name: Setup service account for Play Store submission
-        run: echo '${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_KEY }}' > google-play-service-account.json
+        run: printf '%s' '${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_KEY }}' > google-play-service-account.json
 
       - name: Submit to Google Play (internal track)
         run: eas submit --platform android --profile production --latest --non-interactive
