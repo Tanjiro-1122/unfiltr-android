@@ -450,6 +450,21 @@ export default function App() {
         }
         break;
 
+      // ── Session clear (sign-out / reset) ──
+      case 'CLEAR_DATA':
+        try {
+          const allKeys = [
+            STORAGE_KEY_GOOGLE_ID, STORAGE_KEY_ONBOARDING, STORAGE_KEY_DISPLAY_NAME,
+            STORAGE_KEY_COMPANION_ID, STORAGE_KEY_IS_PREMIUM, STORAGE_KEY_PLAN,
+            STORAGE_KEY_AGE_VERIFIED, STORAGE_KEY_EMAIL, STORAGE_KEY_PUSH_TOKEN,
+          ];
+          await AsyncStorage.multiRemove(allKeys);
+          console.log('[NATIVE] 🗑️ Native session cleared (sign-out)');
+        } catch (e: any) {
+          console.warn('[NATIVE] CLEAR_DATA failed:', e.message);
+        }
+        break;
+
       default:
         console.warn('[BRIDGE] Unhandled message type:', msg.type, msg);
     }
