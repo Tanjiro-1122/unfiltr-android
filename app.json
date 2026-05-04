@@ -2,7 +2,7 @@
   "expo": {
     "name": "Unfiltr by Javier",
     "slug": "unfiltr-by-javier",
-    "version": "1.0.19",
+    "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "splash": {
@@ -14,7 +14,7 @@
     "userInterfaceStyle": "dark",
     "android": {
       "package": "com.huertas.unfiltr",
-      "versionCode": 19,
+      "versionCode": 20,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0f0f1a"
@@ -66,8 +66,7 @@
           "photosPermission": "Unfiltr accesses your photo library so you can share images with your companion."
         }
       ],
-      "@react-native-google-signin/google-signin",
-      "react-native-purchases"
+      "@react-native-google-signin/google-signin"
     ],
     "experiments": {
       "typedRoutes": true
