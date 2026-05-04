@@ -90,6 +90,13 @@ export default function App() {
   const [sessionData, setSessionData] = useState<Record<string, string> | null>(null);
   const loadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // ─── Clear load timeout on unmount ──────────────────────────────────────
+  useEffect(() => {
+    return () => {
+      if (loadTimeoutRef.current) clearTimeout(loadTimeoutRef.current);
+    };
+  }, []);
+
   // ─── Load persisted session ──────────────────────────────────────────────
   useEffect(() => {
     const loadSession = async () => {
@@ -293,6 +300,13 @@ export default function App() {
         STORAGE_KEY_GOOGLE_ID, STORAGE_KEY_EMAIL, STORAGE_KEY_IS_PREMIUM,
         STORAGE_KEY_PLAN, STORAGE_KEY_ONBOARDING,
       ]);
+      // Reset RevenueCat to anonymous so the next sign-in gets a clean identity
+      try {
+        await rcInitPromiseRef.current;
+        await Purchases.logOut();
+      } catch (rcErr: any) {
+        console.warn('[RC] logOut failed (non-fatal):', rcErr.message);
+      }
       sendToWeb({ type: 'GOOGLE_SIGN_OUT_SUCCESS' });
     } catch (e: any) {
       console.warn('[GOOGLE] Sign-out error:', e.message);
@@ -505,6 +519,19 @@ export default function App() {
         }}
         onError={(e) => {
           setLoadError(e.nativeEvent.description);
+          setLoading(false);
+        }}
+        onHttpError={(e) => {
+          // Only surface 5xx server errors — 4xx are client errors the SPA handles
+          const code = e.nativeEvent.statusCode;
+          if (code >= 500) {
+            setLoadError(`Server error (${code}). Please try again later.`);
+            setLoading(false);
+          }
+        }}
+        onRenderProcessGone={() => {
+          // Android killed the WebView renderer (OOM etc.) — reload to recover
+          setLoadError('The page crashed. Tap Retry to reload.');
           setLoading(false);
         }}
         javaScriptEnabled={true}
