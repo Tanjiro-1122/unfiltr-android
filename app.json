@@ -2,9 +2,14 @@
   "expo": {
     "name": "Unfiltr by Javier",
     "slug": "unfiltr-by-javier",
-    "version": "1.0.0",
+    "version": "1.0.19",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0f0f1a"
+    },
     "scheme": "unfiltr",
     "userInterfaceStyle": "dark",
     "android": {
@@ -18,8 +23,6 @@
       "permissions": [
         "RECORD_AUDIO",
         "CAMERA",
-        "READ_EXTERNAL_STORAGE",
-        "WRITE_EXTERNAL_STORAGE",
         "VIBRATE",
         "RECEIVE_BOOT_COMPLETED",
         "POST_NOTIFICATIONS",

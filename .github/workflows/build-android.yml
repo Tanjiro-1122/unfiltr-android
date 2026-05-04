@@ -20,12 +20,6 @@ jobs:
           node-version: "20"
           cache: "npm"
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-
       - name: Install dependencies
         run: npm ci
 
@@ -50,13 +44,19 @@ jobs:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
 
       - name: Setup service account for Play Store submission
-        run: echo '${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_KEY }}' > google-play-service-account.json
+        run: printf '%s' "$GOOGLE_PLAY_SERVICE_ACCOUNT_KEY" > google-play-service-account.json
+        env:
+          GOOGLE_PLAY_SERVICE_ACCOUNT_KEY: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_KEY }}
 
       - name: Submit to Google Play (internal track)
         run: eas submit --platform android --profile production --latest --non-interactive
         continue-on-error: true
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Cleanup service account JSON
+        if: always()
+        run: rm -f google-play-service-account.json
 
       - name: Summary
         run: |

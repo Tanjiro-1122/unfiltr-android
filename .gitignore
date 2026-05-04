@@ -7,7 +7,7 @@ dist/
 *.p12
 *.key
 *.mobileprovision
-*.orig.*
 web-build/
 .env
 google-play-service-account.json
+yarn.lock

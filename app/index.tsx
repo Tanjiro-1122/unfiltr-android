@@ -17,8 +17,12 @@ import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 
 // ─── RevenueCat public SDK key for Android ────────────────────────────────────
-// Replace with your RevenueCat Android key from the dashboard
-const RC_API_KEY = process.env.EXPO_PUBLIC_RC_KEY ?? 'REPLACE_WITH_ANDROID_RC_KEY';
+// Injected at EAS build time via the EXPO_PUBLIC_RC_KEY environment variable.
+// In development / preview builds without the variable set, purchases will not work.
+const RC_API_KEY = process.env.EXPO_PUBLIC_RC_KEY ?? '';
+if (!RC_API_KEY) {
+  console.error('[RC] EXPO_PUBLIC_RC_KEY is not set — in-app purchases will not work.');
+}
 
 // ─── Google OAuth Web Client ID (from Google Cloud Console) ──────────────────
 // Must be the WEB client ID (not Android), used for idToken generation
@@ -85,6 +89,13 @@ export default function App() {
   const [loadError, setLoadError]   = useState<string | null>(null);
   const [sessionData, setSessionData] = useState<Record<string, string> | null>(null);
   const loadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ─── Clear load timeout on unmount ──────────────────────────────────────
+  useEffect(() => {
+    return () => {
+      if (loadTimeoutRef.current) clearTimeout(loadTimeoutRef.current);
+    };
+  }, []);
 
   // ─── Load persisted session ──────────────────────────────────────────────
   useEffect(() => {
@@ -289,6 +300,13 @@ export default function App() {
         STORAGE_KEY_GOOGLE_ID, STORAGE_KEY_EMAIL, STORAGE_KEY_IS_PREMIUM,
         STORAGE_KEY_PLAN, STORAGE_KEY_ONBOARDING,
       ]);
+      // Reset RevenueCat to anonymous so the next sign-in gets a clean identity
+      try {
+        await rcInitPromiseRef.current;
+        await Purchases.logOut();
+      } catch (rcErr: any) {
+        console.warn('[RC] logOut failed (non-fatal):', rcErr.message);
+      }
       sendToWeb({ type: 'GOOGLE_SIGN_OUT_SUCCESS' });
     } catch (e: any) {
       console.warn('[GOOGLE] Sign-out error:', e.message);
@@ -503,6 +521,19 @@ export default function App() {
           setLoadError(e.nativeEvent.description);
           setLoading(false);
         }}
+        onHttpError={(e) => {
+          // Only surface 5xx server errors — 4xx are client errors the SPA handles
+          const code = e.nativeEvent.statusCode;
+          if (code >= 500) {
+            setLoadError(`Server error (${code}). Please try again later.`);
+            setLoading(false);
+          }
+        }}
+        onRenderProcessGone={() => {
+          // Android killed the WebView renderer (OOM etc.) — reload to recover
+          setLoadError('The page crashed. Tap Retry to reload.');
+          setLoading(false);
+        }}
         javaScriptEnabled={true}
         domStorageEnabled={true}
         allowsInlineMediaPlayback={true}
@@ -520,7 +551,6 @@ export default function App() {
           if (url.startsWith('https://accounts.google.com')) return true;
           if (url.startsWith('https://oauth2.googleapis.com')) return true;
           if (url.startsWith('https://www.googleapis.com')) return true;
-          if (url.includes('google') && url.includes('auth')) return true;
           // Allow Google Pay and Play Billing redirect URLs.
           // Use anchored regex to prevent prefix-matching attacks like
           // https://pay.google.com.evil.com — the path component must start with /
@@ -547,6 +577,7 @@ export default function App() {
             onPress={() => {
               setLoadError(null);
               setLoading(true);
+              rcReadySentRef.current = false;
               webViewRef.current?.reload();
             }}
           >

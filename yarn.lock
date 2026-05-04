@@ -1,3 +1,0 @@
-# This file is intentionally committed to enable deterministic installs in CI.
-#
-# If you are using npm, commit package-lock.json instead of relying on npm install.
