@@ -60,7 +60,6 @@ jobs:
 
       - name: Submit to Google Play (internal track)
         run: eas submit --platform android --profile production --latest --non-interactive
-        continue-on-error: true
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
 
