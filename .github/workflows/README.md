@@ -1,0 +1,1 @@
+The Android 16 upgrade workflow installs and aligns Expo SDK 54 dependencies, runs Expo Doctor, exports the Android bundle, verifies API 36 metadata and the preserved Vercel origin, then uploads the generated package manifests for review.
