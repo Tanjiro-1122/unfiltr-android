@@ -5,7 +5,8 @@
   "scripts": {
     "start": "expo start",
     "android": "expo start --android",
-    "validate": "npx expo install --check && npx expo-doctor && npx expo export --platform android --output-dir dist/android"
+    "typecheck": "tsc --noEmit",
+    "validate": "npm run typecheck && npx expo install --check && npx expo-doctor && npx expo export --platform android --output-dir dist/android"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",
@@ -35,7 +36,9 @@
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
-    "babel-preset-expo": "~54.0.0"
+    "@types/react": "~19.1.10",
+    "babel-preset-expo": "~54.0.0",
+    "typescript": "~5.9.2"
   },
   "private": true
 }
