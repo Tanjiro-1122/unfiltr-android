@@ -1,0 +1,79 @@
+name: Validate Android 16 Upgrade
+
+on:
+  push:
+    branches:
+      - upgrade/android-16-billing-8
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install upgrade dependencies
+        run: npm install
+
+      - name: Align Expo SDK 54 packages
+        run: npx expo install --fix
+
+      - name: Verify Expo dependency alignment
+        run: npx expo install --check
+
+      - name: Expo Doctor
+        run: npx expo-doctor
+
+      - name: Export Android bundle
+        run: npx expo export --platform android --output-dir dist/android
+
+      - name: Verify Android compliance metadata
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const config = JSON.parse(fs.readFileSync('app.json', 'utf8')).expo;
+          const buildProperties = config.plugins.find(
+            (plugin) => Array.isArray(plugin) && plugin[0] === 'expo-build-properties',
+          )?.[1]?.android;
+
+          const actual = {
+            versionCode: config.android?.versionCode,
+            compileSdkVersion: buildProperties?.compileSdkVersion,
+            targetSdkVersion: buildProperties?.targetSdkVersion,
+            buildToolsVersion: buildProperties?.buildToolsVersion,
+            webOrigin: config.extra?.router?.origin,
+          };
+          console.log(actual);
+
+          if (
+            actual.versionCode !== 21 ||
+            actual.compileSdkVersion !== 36 ||
+            actual.targetSdkVersion !== 36 ||
+            actual.buildToolsVersion !== '36.0.0' ||
+            actual.webOrigin !== 'https://unfiltrbyjavier2.vercel.app'
+          ) {
+            process.exit(1);
+          }
+          NODE
+
+      - name: Upload aligned dependency manifests
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-16-aligned-manifests
+          path: |
+            package.json
+            package-lock.json
