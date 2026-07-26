@@ -29,8 +29,28 @@ jobs:
       - name: Install upgrade dependencies
         run: npm install
 
-      - name: Align Expo SDK 54 packages
-        run: npx expo install --fix
+      - name: Capture Expo SDK 54 alignment
+        id: align
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          npx expo install --fix 2>&1 | tee expo-align.log
+
+      - name: Upload alignment diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-16-alignment-diagnostics
+          path: |
+            expo-align.log
+            package.json
+            package-lock.json
+          if-no-files-found: error
+
+      - name: Stop when alignment fails
+        if: steps.align.outcome == 'failure'
+        run: exit 1
 
       - name: Verify Expo dependency alignment
         run: npx expo install --check
@@ -69,11 +89,3 @@ jobs:
             process.exit(1);
           }
           NODE
-
-      - name: Upload aligned dependency manifests
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-16-aligned-manifests
-          path: |
-            package.json
-            package-lock.json
