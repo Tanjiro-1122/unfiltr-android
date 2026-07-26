@@ -115,7 +115,7 @@ jobs:
       - name: Commit aligned dependency lockfile
         if: github.event_name == 'push'
         run: |
-          if git diff --quiet -- package.json package-lock.json; then
+          if [ -z "$(git status --porcelain -- package.json package-lock.json)" ]; then
             echo "Dependency manifests are already committed."
             exit 0
           fi
