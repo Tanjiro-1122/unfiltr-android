@@ -55,6 +55,9 @@ jobs:
       - name: Verify Expo dependency alignment
         run: npx expo install --check
 
+      - name: Typecheck Android wrapper
+        run: npm run typecheck
+
       - name: Expo Doctor
         run: npx expo-doctor
 
