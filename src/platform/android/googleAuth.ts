@@ -1,5 +1,7 @@
 import {
   GoogleSignin,
+  isCancelledResponse,
+  isSuccessResponse,
   statusCodes,
   type User,
 } from '@react-native-google-signin/google-signin';
@@ -48,11 +50,17 @@ export async function signInWithGoogleAndroid(): Promise<AndroidGoogleAccount> {
   try {
     await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
     const response = await GoogleSignin.signIn();
-    const user = response.data?.user;
-    if (!user) throw new Error('Google Sign-In returned no user profile.');
 
-    return mapGoogleUser(user, response.data?.idToken ?? null);
+    if (isCancelledResponse(response)) {
+      throw new AndroidGoogleAuthError('cancelled', 'Google sign-in was cancelled.');
+    }
+    if (!isSuccessResponse(response)) {
+      throw new AndroidGoogleAuthError('unknown', 'Google Sign-In returned no user profile.');
+    }
+
+    return mapGoogleUser(response.data);
   } catch (error) {
+    if (error instanceof AndroidGoogleAuthError) throw error;
     throw normalizeGoogleAuthError(error);
   }
 }
@@ -65,30 +73,23 @@ export async function signOutGoogleAndroid(): Promise<void> {
   }
 }
 
-export async function getCurrentGoogleAccountAndroid(): Promise<AndroidGoogleAccount | null> {
-  const response = GoogleSignin.getCurrentUser();
-  const user = response?.user;
-  if (!user) return null;
-  return mapGoogleUser(user, response.idToken ?? null);
+export function getCurrentGoogleAccountAndroid(): AndroidGoogleAccount | null {
+  const user = GoogleSignin.getCurrentUser();
+  return user ? mapGoogleUser(user) : null;
 }
 
-function mapGoogleUser(user: User, idToken: string | null): AndroidGoogleAccount {
+function mapGoogleUser(user: User): AndroidGoogleAccount {
   return {
-    googleUserId: user.id,
-    email: user.email || null,
-    displayName: user.name || user.givenName || 'Friend',
-    idToken,
-    photoUrl: user.photo || null,
+    googleUserId: user.user.id,
+    email: user.user.email || null,
+    displayName: user.user.name || user.user.givenName || 'Friend',
+    idToken: user.idToken ?? null,
+    photoUrl: user.user.photo || null,
   };
 }
 
 function normalizeGoogleAuthError(error: unknown): AndroidGoogleAuthError {
   const candidate = error as { code?: string; message?: string };
-  if (candidate?.code === statusCodes.SIGN_IN_CANCELLED) {
-    return new AndroidGoogleAuthError('cancelled', 'Google sign-in was cancelled.', {
-      cause: error,
-    });
-  }
   if (candidate?.code === statusCodes.IN_PROGRESS) {
     return new AndroidGoogleAuthError('in_progress', 'Google sign-in is already in progress.', {
       cause: error,
