@@ -1,0 +1,1 @@
+export { AgeGateScreen } from './AgeGateScreen';

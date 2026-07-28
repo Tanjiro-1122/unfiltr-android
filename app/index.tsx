@@ -1,654 +1,1191 @@
-import { useEffect, useRef, useState } from 'react';
-import { WebView } from 'react-native-webview';
-import {
-  StyleSheet, View, ActivityIndicator, StatusBar,
-  Text, TouchableOpacity,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import Purchases, { LOG_LEVEL } from 'react-native-purchases';
-import type { PurchasesOfferings } from 'react-native-purchases';
-import {
-  GoogleSignin,
-  statusCodes,
-} from '@react-native-google-signin/google-signin';
-import * as Crypto from 'expo-crypto';
 import * as Notifications from 'expo-notifications';
-import Constants from 'expo-constants';
+import {
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
+import { ActivityIndicator, Platform, StyleSheet, Text, View } from 'react-native';
 
-// ─── RevenueCat public SDK key for Android ────────────────────────────────────
-// Injected at EAS build time via the EXPO_PUBLIC_RC_KEY environment variable.
-// In development / preview builds without the variable set, purchases will not work.
-const RC_API_KEY = process.env.EXPO_PUBLIC_RC_KEY ?? '';
-if (!RC_API_KEY) {
-  console.error('[RC] EXPO_PUBLIC_RC_KEY is not set — in-app purchases will not work.');
+import { AccountRestoreErrorScreen } from '@/features/accountRecovery';
+import { AdminDashboardScreen } from '@/features/admin';
+import { ChatScreen, type ChatMessage } from '@/features/chat';
+import { HomeScreen } from '@/features/home';
+import { JournalScreen } from '@/features/journal';
+import { MeditationScreen } from '@/features/meditation';
+import { MemoryScreen } from '@/features/memory/MemoryScreen';
+import { NotificationsScreen } from '@/features/notifications';
+import { AgeGateScreen } from '@/features/onboarding/ageGate';
+import { AppleSignInScreen } from '@/features/onboarding/appleSignIn';
+import { CompanionNamingScreen } from '@/features/onboarding/companionNaming';
+import {
+  CompanionQuizScreen,
+  QuizMatchRevealScreen,
+  type CompanionId,
+  type QuizMatchResult,
+} from '@/features/onboarding/companionQuiz';
+import { CompanionSelectionScreen } from '@/features/onboarding/companionSelection';
+import { ConnectionStyleScreen } from '@/features/onboarding/connectionStyle';
+import { FindMatchScreen } from '@/features/onboarding/findMatch';
+import { GoogleSignInScreen } from '@/features/onboarding/googleSignIn';
+import { NameScreen } from '@/features/onboarding/name';
+import {
+  PRIVACY_CONSENT_VERSION,
+  PrivacyConsentScreen,
+} from '@/features/onboarding/privacyConsent';
+import { SplashScreen } from '@/features/onboarding/splash';
+import { PremiumScreen } from '@/features/premium';
+import { SettingsScreen } from '@/features/settings';
+import {
+  classifyProfileDiagnostic,
+  runProfileDiagnostic,
+  unavailableProfileDiagnostic,
+  type ProfileDiagnosticResult,
+} from '@/lib/accountDiagnostic';
+import { clearAuthenticatedSession, clearRememberedAccountIdentity } from '@/lib/auth/session';
+import { restoreStartupAuthSession, type StartupAuthStatus } from '@/lib/auth/startup';
+import { useAndroidBackHandler } from '@/lib/navigation/useAndroidBackHandler';
+import { signOutRevenueCat } from '@/lib/purchases/revenueCat';
+import { hydrateLocalProfileFromRestoration } from '@/lib/restoration/hydrateLocalProfile';
+import {
+  clearRestorationForSignOut,
+  refreshRestoration,
+  useRestoration,
+} from '@/lib/restoration/restorationStore';
+import { deleteSecureItem, getSecureItem } from '@/lib/storage';
+import { deleteAppStorageItem } from '@/lib/storage/appStorage';
+import { signOutGoogleAndroid } from '@/platform/android/googleAuth';
+
+/**
+ * Once auth completes, the account is resolved against the backend exactly
+ * once before any menu is reachable:
+ *  - 'new'       genuinely new account -> run the create-a-companion onboarding
+ *  - 'returning' backend found exactly one profile -> restore it, go straight to Main Menu
+ *  - 'blocked'   diagnostic was ambiguous/unavailable, or restoration ultimately
+ *                failed with no usable cache -> show AccountRestoreErrorScreen
+ */
+type AccountResolution = 'blocked' | 'new' | 'pending' | 'returning';
+
+type OnboardingStatus = {
+  ageGateComplete: boolean;
+  authComplete: boolean;
+  companionNamingComplete: boolean;
+  companionSelectionComplete: boolean;
+  connectionStyleComplete: boolean;
+  findMatchComplete: boolean;
+  matchMode: 'manual' | 'quiz' | null;
+  nameComplete: boolean;
+  privacyConsentComplete: boolean;
+  quizResult: QuizMatchResult | null;
+  selectedCompanionId: CompanionId | null;
+};
+
+type AppScreen =
+  | 'admin'
+  | 'chat'
+  | 'home'
+  | 'journal'
+  | 'meditation'
+  | 'memory'
+  | 'notifications'
+  | 'premium'
+  | 'settings';
+
+// Neither the account lookup nor the wait for restoration to finish may hang
+// indefinitely -- both must resolve to an explicit retry/error state.
+const ACCOUNT_LOOKUP_TIMEOUT_MS = 20000;
+const RESTORATION_WAIT_TIMEOUT_MS = 20000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Request timed out.')), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
 }
 
-// ─── Google OAuth Web Client ID (from Google Cloud Console) ──────────────────
-// Must be the WEB client ID (not Android), used for idToken generation
-const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '1033825374489-l6l27elju2n2i0k5fug6jf0kb0rvvguh.apps.googleusercontent.com';
+const initialOnboardingStatus: OnboardingStatus = {
+  ageGateComplete: false,
+  authComplete: false,
+  companionNamingComplete: false,
+  companionSelectionComplete: false,
+  connectionStyleComplete: false,
+  findMatchComplete: false,
+  matchMode: null,
+  nameComplete: false,
+  privacyConsentComplete: false,
+  quizResult: null,
+  selectedCompanionId: null,
+};
 
-const APP_URL    = 'https://unfiltrbyjavier2.vercel.app';
-const APP_ORIGIN = 'https://unfiltrbyjavier2.vercel.app';
+function getSearchParam(name: string): string | null {
+  if (!__DEV__ || Platform.OS !== 'web' || typeof window === 'undefined') return null;
+  return new URLSearchParams(window.location.search).get(name);
+}
 
-// ─── AsyncStorage keys (match iOS wrapper exactly so data is consistent) ──────
-const STORAGE_KEY_GOOGLE_ID    = 'unfiltr_google_user_id';
-const STORAGE_KEY_ONBOARDING   = 'unfiltr_onboarding_complete';
-const STORAGE_KEY_DISPLAY_NAME = 'unfiltr_display_name';
-const STORAGE_KEY_COMPANION_ID = 'unfiltr_companion_id';
-const STORAGE_KEY_IS_PREMIUM   = 'unfiltr_is_premium';
-const STORAGE_KEY_PLAN         = 'unfiltr_plan';
-const STORAGE_KEY_AGE_VERIFIED = 'unfiltr_age_verified';
-const STORAGE_KEY_EMAIL        = 'unfiltr_user_email';
-const STORAGE_KEY_PUSH_TOKEN   = 'unfiltr_push_token';
+function shouldCapturePrivacyConsent(): boolean {
+  return getSearchParam('captureScreen') === 'privacyConsent';
+}
 
-// ─── Bridge init JS ────────────────────────────────────────────────────────────
-const BRIDGE_INIT_JS = `(function() {
-  if (window.__rnBridgeReady) return;
-  window.__rnBridgeReady = true;
-  if (!window.__nativeBus) { window.__nativeBus = function(msg) {}; }
-  window.onMessageFromRN = function(raw) {
-    try {
-      var parsed = (typeof raw === 'string') ? JSON.parse(raw) : raw;
-      if (typeof window.__nativeBus === 'function') window.__nativeBus(parsed);
-    } catch(e) {}
+function shouldCaptureAppleSignIn(): boolean {
+  return getSearchParam('captureScreen') === 'appleSignIn';
+}
+
+function shouldCaptureName(): boolean {
+  return getSearchParam('captureScreen') === 'name';
+}
+
+function shouldCaptureFindMatch(): boolean {
+  return getSearchParam('captureScreen') === 'findMatch';
+}
+
+function shouldCaptureQuiz(): boolean {
+  return getSearchParam('captureScreen') === 'companionQuiz';
+}
+
+function shouldCaptureQuizResult(): boolean {
+  return getSearchParam('captureScreen') === 'quizResult';
+}
+
+function shouldCaptureCompanionSelection(): boolean {
+  return getSearchParam('captureScreen') === 'companionSelection';
+}
+
+function shouldCaptureCompanionNaming(): boolean {
+  return getSearchParam('captureScreen') === 'companionNaming';
+}
+
+function shouldCaptureConnectionStyle(): boolean {
+  return getSearchParam('captureScreen') === 'connectionStyle';
+}
+
+function shouldCaptureHome(): boolean {
+  return getSearchParam('captureScreen') === 'home';
+}
+
+function shouldCaptureChat(): boolean {
+  return getSearchParam('captureScreen') === 'chat';
+}
+
+function shouldCaptureJournal(): boolean {
+  return getSearchParam('captureScreen') === 'journal';
+}
+
+function shouldCaptureMeditation(): boolean {
+  return getSearchParam('captureScreen') === 'meditation';
+}
+
+function shouldCaptureNotifications(): boolean {
+  return getSearchParam('captureScreen') === 'notifications';
+}
+
+function shouldCapturePremium(): boolean {
+  return getSearchParam('captureScreen') === 'premium';
+}
+
+function shouldCaptureSettings(): boolean {
+  return getSearchParam('captureScreen') === 'settings';
+}
+
+function shouldCaptureSplash(): boolean {
+  return getSearchParam('captureScreen') === 'splash';
+}
+
+function shouldShowCenterGuide(): boolean {
+  return getSearchParam('centerGuide') === '1';
+}
+
+function resetWebViewport() {
+  if (Platform.OS !== 'web' || typeof document === 'undefined') return;
+
+  document.documentElement.style.margin = '0';
+  document.documentElement.style.padding = '0';
+  document.documentElement.style.width = '100%';
+  document.documentElement.style.height = '100%';
+  document.body.style.margin = '0';
+  document.body.style.padding = '0';
+  document.body.style.width = '100%';
+  document.body.style.height = '100%';
+  document.body.style.overflow = 'hidden';
+}
+
+function ScreenFrame({
+  children,
+  showCenterGuide,
+}: {
+  children: ReactNode;
+  showCenterGuide: boolean;
+}) {
+  return (
+    <View style={styles.screenFrame}>
+      {children}
+      {showCenterGuide ? <View pointerEvents="none" style={styles.centerGuide} /> : null}
+    </View>
+  );
+}
+
+function AccountResolvingView() {
+  return (
+    <View style={styles.resolvingRoot}>
+      <ActivityIndicator color="#C084FC" size="large" />
+      <Text style={styles.resolvingText}>Restoring your account...</Text>
+    </View>
+  );
+}
+
+function captureStatus(screen: string): {
+  onboarding: OnboardingStatus;
+  resolution: AccountResolution | null;
+} {
+  const baseComplete: OnboardingStatus = {
+    ageGateComplete: true,
+    authComplete: true,
+    companionNamingComplete: false,
+    companionSelectionComplete: false,
+    connectionStyleComplete: false,
+    findMatchComplete: false,
+    matchMode: null,
+    nameComplete: false,
+    privacyConsentComplete: true,
+    quizResult: null,
+    selectedCompanionId: null,
   };
-  // Tell web app we are running inside the Android wrapper
-  window.__isAndroid = true;
-  window.__isNativeApp = true;
-})();`;
 
-async function registerForPushNotifications(): Promise<string | null> {
-  try {
-    const { status: existing } = await Notifications.getPermissionsAsync();
-    let finalStatus = existing;
-    if (existing !== 'granted') {
-      const { status } = await Notifications.requestPermissionsAsync();
-      finalStatus = status;
-    }
-    if (finalStatus !== 'granted') return null;
-    const projectId: string = Constants.expoConfig?.extra?.eas?.projectId ?? '';
-    if (!projectId) return null;
-    const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
-    return tokenData.data || null;
-  } catch (e: any) {
-    console.log('[PUSH] Registration failed:', e.message);
-    return null;
+  if (screen === 'privacyConsent') {
+    return {
+      onboarding: { ...baseComplete, authComplete: false, privacyConsentComplete: false },
+      resolution: null,
+    };
   }
+
+  if (screen === 'appleSignIn') {
+    return {
+      onboarding: { ...baseComplete, authComplete: false },
+      resolution: null,
+    };
+  }
+
+  if (screen === 'name') {
+    return { onboarding: baseComplete, resolution: 'new' };
+  }
+
+  if (screen === 'findMatch') {
+    return { onboarding: { ...baseComplete, nameComplete: true }, resolution: 'new' };
+  }
+
+  if (screen === 'companionQuiz') {
+    return {
+      onboarding: { ...baseComplete, findMatchComplete: true, matchMode: 'quiz', nameComplete: true },
+      resolution: 'new',
+    };
+  }
+
+  if (screen === 'quizResult') {
+    return {
+      onboarding: {
+        ...baseComplete,
+        findMatchComplete: true,
+        matchMode: 'quiz',
+        nameComplete: true,
+        quizResult: {
+          matchId: 'luna',
+          maxPts: 10,
+          top3: [
+            { companionId: 'luna', pts: 10 },
+            { companionId: 'river', pts: 8 },
+            { companionId: 'echo', pts: 5 },
+          ],
+        },
+      },
+      resolution: 'new',
+    };
+  }
+
+  if (screen === 'companionSelection') {
+    return {
+      onboarding: {
+        ...baseComplete,
+        findMatchComplete: true,
+        matchMode: 'manual',
+        nameComplete: true,
+      },
+      resolution: 'new',
+    };
+  }
+
+  if (
+    screen === 'home' ||
+    screen === 'journal' ||
+    screen === 'meditation' ||
+    screen === 'notifications' ||
+    screen === 'premium' ||
+    screen === 'settings' ||
+    screen === 'chat'
+  ) {
+    return {
+      onboarding: {
+        ...baseComplete,
+        companionNamingComplete: true,
+        companionSelectionComplete: true,
+        connectionStyleComplete: true,
+        findMatchComplete: true,
+        nameComplete: true,
+        selectedCompanionId: 'luna',
+      },
+      resolution: 'returning',
+    };
+  }
+
+  if (screen === 'connectionStyle') {
+    return {
+      onboarding: {
+        ...baseComplete,
+        companionNamingComplete: true,
+        companionSelectionComplete: true,
+        findMatchComplete: true,
+        nameComplete: true,
+        selectedCompanionId: 'luna',
+      },
+      resolution: 'new',
+    };
+  }
+
+  if (screen === 'companionNaming') {
+    return {
+      onboarding: {
+        ...baseComplete,
+        companionSelectionComplete: true,
+        findMatchComplete: true,
+        nameComplete: true,
+        selectedCompanionId: 'luna',
+      },
+      resolution: 'new',
+    };
+  }
+
+  return { onboarding: initialOnboardingStatus, resolution: null };
 }
 
-export default function App() {
-  const webViewRef         = useRef<WebView | null>(null);
-  const rcInitPromiseRef   = useRef<Promise<void>>(Promise.resolve());
-  const cachedOfferingsRef = useRef<PurchasesOfferings | null>(null);
-  const googleSignInActiveRef = useRef<boolean>(false);
-  const rcInitStateRef     = useRef<{ ok: boolean; error?: string } | null>(null);
-  const rcReadySentRef     = useRef<boolean>(false);
+export default function FoundationScreen() {
+  resetWebViewport();
 
-  const [loading, setLoading]       = useState(true);
-  const [loadError, setLoadError]   = useState<string | null>(null);
-  const [sessionData, setSessionData] = useState<Record<string, string> | null>(null);
-  const loadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const captureHome = shouldCaptureHome();
+  const captureSplash = shouldCaptureSplash();
+  const captureAppleSignIn = shouldCaptureAppleSignIn();
+  const captureFindMatch = shouldCaptureFindMatch();
+  const captureName = shouldCaptureName();
+  const capturePrivacyConsent = shouldCapturePrivacyConsent();
+  const captureQuiz = shouldCaptureQuiz();
+  const captureQuizResult = shouldCaptureQuizResult();
+  const captureCompanionSelection = shouldCaptureCompanionSelection();
+  const captureCompanionNaming = shouldCaptureCompanionNaming();
+  const captureConnectionStyle = shouldCaptureConnectionStyle();
+  const showCenterGuide = shouldShowCenterGuide();
+  const captureChat = shouldCaptureChat();
+  const captureJournal = shouldCaptureJournal();
+  const captureMeditation = shouldCaptureMeditation();
+  const captureNotifications = shouldCaptureNotifications();
+  const capturePremium = shouldCapturePremium();
+  const captureSettings = shouldCaptureSettings();
+  const activeCaptureScreen = getSearchParam('captureScreen') ?? (captureSplash ? 'splash' : null);
+  const bypassSplash =
+    !!activeCaptureScreen &&
+    activeCaptureScreen !== 'splash' &&
+    (capturePrivacyConsent ||
+      captureAppleSignIn ||
+      captureName ||
+      captureFindMatch ||
+      captureQuiz ||
+      captureQuizResult ||
+      captureCompanionSelection ||
+      captureCompanionNaming ||
+      captureConnectionStyle ||
+      captureHome ||
+      captureChat ||
+      captureJournal ||
+      captureMeditation ||
+      captureNotifications ||
+      capturePremium ||
+      captureSettings);
+  const [splashComplete, setSplashComplete] = useState(bypassSplash);
+  const [activeScreen, setActiveScreen] = useState<AppScreen>(() => {
+    if (captureChat) return 'chat';
+    if (captureJournal) return 'journal';
+    if (captureMeditation) return 'meditation';
+    if (captureNotifications) return 'notifications';
+    if (capturePremium) return 'premium';
+    if (captureSettings) return 'settings';
+    return 'home';
+  });
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [startupAuthStatus, setStartupAuthStatus] = useState<StartupAuthStatus>('unauthenticated');
+  const [isRestoreRetrying, setIsRestoreRetrying] = useState(false);
+  const [settingsReturnTo, setSettingsReturnTo] = useState<AppScreen>('home');
+  const [premiumReturnTo, setPremiumReturnTo] = useState<AppScreen>('home');
+  const initialCapture = activeCaptureScreen ? captureStatus(activeCaptureScreen) : null;
+  const [onboardingStatus, setOnboardingStatus] = useState<OnboardingStatus>(
+    () => initialCapture?.onboarding ?? initialOnboardingStatus,
+  );
+  const [accountResolution, setAccountResolution] = useState<AccountResolution | null>(
+    () => initialCapture?.resolution ?? null,
+  );
+  const [statusLoaded, setStatusLoaded] = useState(bypassSplash);
+  const handledResponseId = useRef<string | null>(null);
+  const hydratedAccountIdRef = useRef<string | null>(null);
+  const restoration = useRestoration();
 
-  // ─── Clear load timeout on unmount ──────────────────────────────────────
-  useEffect(() => {
-    return () => {
-      if (loadTimeoutRef.current) clearTimeout(loadTimeoutRef.current);
-    };
-  }, []);
-
-  // ─── Load persisted session ──────────────────────────────────────────────
-  useEffect(() => {
-    const loadSession = async () => {
-      try {
-        const keys = [
-          STORAGE_KEY_GOOGLE_ID, STORAGE_KEY_ONBOARDING, STORAGE_KEY_DISPLAY_NAME,
-          STORAGE_KEY_COMPANION_ID, STORAGE_KEY_IS_PREMIUM, STORAGE_KEY_PLAN,
-          STORAGE_KEY_AGE_VERIFIED, STORAGE_KEY_EMAIL, STORAGE_KEY_PUSH_TOKEN,
-        ];
-        const pairs = await AsyncStorage.multiGet(keys);
-        const stored: Record<string, string | null> = {};
-        pairs.forEach(([k, v]) => { stored[k] = v; });
-
-        const data: Record<string, string> = {};
-        if (stored[STORAGE_KEY_GOOGLE_ID])    data['unfiltr_google_user_id']       = stored[STORAGE_KEY_GOOGLE_ID]!;
-        if (stored[STORAGE_KEY_ONBOARDING])   data['unfiltr_onboarding_complete']  = stored[STORAGE_KEY_ONBOARDING]!;
-        if (stored[STORAGE_KEY_DISPLAY_NAME]) data['unfiltr_display_name']         = stored[STORAGE_KEY_DISPLAY_NAME]!;
-        if (stored[STORAGE_KEY_COMPANION_ID]) {
-          data['unfiltr_companion_id'] = stored[STORAGE_KEY_COMPANION_ID]!;
-          data['companionId']          = stored[STORAGE_KEY_COMPANION_ID]!;
-        }
-        if (stored[STORAGE_KEY_IS_PREMIUM])   data['unfiltr_is_premium']           = stored[STORAGE_KEY_IS_PREMIUM]!;
-        if (stored[STORAGE_KEY_PLAN])         data['unfiltr_plan']                 = stored[STORAGE_KEY_PLAN]!;
-        if (stored[STORAGE_KEY_AGE_VERIFIED]) data['unfiltr_age_verified']         = stored[STORAGE_KEY_AGE_VERIFIED]!;
-        if (stored[STORAGE_KEY_EMAIL]) {
-          data['unfiltr_user_email']  = stored[STORAGE_KEY_EMAIL]!;
-          data['unfiltr_apple_email'] = stored[STORAGE_KEY_EMAIL]!; // web app checks this key too
-        }
-        if (stored[STORAGE_KEY_PUSH_TOKEN])   data['unfiltr_push_token']           = stored[STORAGE_KEY_PUSH_TOKEN]!;
-
-        setSessionData(data);
-      } catch (e) {
-        console.warn('[NATIVE] AsyncStorage read failed:', e);
-        setSessionData({});
-      }
-    };
-    loadSession();
-  }, []);
-
-  // ─── Init RevenueCat ─────────────────────────────────────────────────────
-  useEffect(() => {
-    rcInitPromiseRef.current = (async () => {
-      try {
-        if (__DEV__) Purchases.setLogLevel(LOG_LEVEL.DEBUG);
-        await Purchases.configure({ apiKey: RC_API_KEY });
-        rcInitStateRef.current = { ok: true };
-        console.log('[RC] Configured for Android');
-      } catch (e: any) {
-        rcInitStateRef.current = { ok: false, error: e.message };
-        console.error('[RC] Init error:', e.message);
-      }
-    })();
-  }, []);
-
-  // ─── Init Google Sign-In ──────────────────────────────────────────────────
-  useEffect(() => {
-    GoogleSignin.configure({
-      webClientId: GOOGLE_WEB_CLIENT_ID,
-      offlineAccess: true,
-      scopes: ['profile', 'email'],
-    });
-    console.log('[GOOGLE] Sign-In configured');
-  }, []);
-
-  // ─── Persist session ──────────────────────────────────────────────────────
-  const persistSession = async (data: {
-    googleUserId?: string;
-    email?: string | null;
-    pushToken?: string | null;
-    onboardingComplete?: boolean;
-    displayName?: string;
-    companionId?: string;
-    isPremium?: boolean;
-    plan?: string | null;
-    ageVerified?: boolean;
-  }) => {
-    try {
-      const toSet: [string, string][] = [];
-      const toRemove: string[] = [];
-
-      if (data.googleUserId !== undefined)       toSet.push([STORAGE_KEY_GOOGLE_ID, data.googleUserId]);
-      if (data.email)                            toSet.push([STORAGE_KEY_EMAIL, data.email]);
-      if (data.pushToken)                        toSet.push([STORAGE_KEY_PUSH_TOKEN, data.pushToken]);
-      if (data.displayName !== undefined)        toSet.push([STORAGE_KEY_DISPLAY_NAME, data.displayName]);
-      if (data.companionId !== undefined)        toSet.push([STORAGE_KEY_COMPANION_ID, data.companionId]);
-      if (data.plan)                             toSet.push([STORAGE_KEY_PLAN, data.plan]);
-      else if (data.plan === null)               toRemove.push(STORAGE_KEY_PLAN);
-      if (data.onboardingComplete === true)      toSet.push([STORAGE_KEY_ONBOARDING, 'true']);
-      else if (data.onboardingComplete === false) toRemove.push(STORAGE_KEY_ONBOARDING);
-      if (data.isPremium === true)               toSet.push([STORAGE_KEY_IS_PREMIUM, 'true']);
-      else if (data.isPremium === false)         toRemove.push(STORAGE_KEY_IS_PREMIUM);
-      if (data.ageVerified === true)             toSet.push([STORAGE_KEY_AGE_VERIFIED, 'true']);
-      else if (data.ageVerified === false)       toRemove.push(STORAGE_KEY_AGE_VERIFIED);
-
-      if (toSet.length > 0)    await AsyncStorage.multiSet(toSet);
-      if (toRemove.length > 0) await AsyncStorage.multiRemove(toRemove);
-    } catch (e) {
-      console.warn('[NATIVE] AsyncStorage write failed:', e);
+  // Chat, Journal, and Meditation own their in-screen back stacks (options
+  // sheet / world picker / active session) and register their own Android
+  // hardware-back handler, so this only covers the screens that have no
+  // nested state of their own. 'home' falls through to the OS default
+  // (minimize the app), matching standard Android back behavior.
+  function handleTopLevelAndroidBack() {
+    if (activeScreen === 'settings') {
+      setActiveScreen(captureSettings ? 'home' : settingsReturnTo);
+      return true;
     }
-  };
-
-  // ─── Safe send to WebView ─────────────────────────────────────────────────
-  const sendToWeb = (payload: object) => {
-    try {
-      const serialized = JSON.stringify(payload);
-      const safe = JSON.stringify(serialized);
-      const js = `(function(){try{var p=JSON.parse(${safe});if(typeof window.__nativeBus==='function'){window.__nativeBus(p);}else if(typeof window.onMessageFromRN==='function'){window.onMessageFromRN(p);}}catch(e){}})();true;`;
-      webViewRef.current?.injectJavaScript(js);
-    } catch (e) {
-      console.warn('[NATIVE] sendToWeb failed:', e);
+    if (activeScreen === 'premium') {
+      setActiveScreen(premiumReturnTo);
+      return true;
     }
-  };
-
-  // ─── Google Sign-In handler ───────────────────────────────────────────────
-  const handleGoogleSignIn = async () => {
-    if (googleSignInActiveRef.current) return;
-    googleSignInActiveRef.current = true;
-
-    try {
-      await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
-      const userInfo = await GoogleSignin.signIn();
-
-      const googleUser = userInfo.data?.user;
-      if (!googleUser) throw new Error('No user data returned from Google');
-
-      const googleUserId = googleUser.id;
-      const email        = googleUser.email ?? null;
-      const displayName  = googleUser.name ?? googleUser.givenName ?? 'Friend';
-      const idToken      = userInfo.data?.idToken ?? null;
-
-      console.log('[GOOGLE] Signed in:', googleUserId);
-
-      // Sync with Vercel backend
-      try {
-        const syncRes = await fetch(`${APP_URL}/api/syncProfile`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            google_user_id: googleUserId,
-            email,
-            display_name: displayName,
-            platform: 'android',
-          }),
-        });
-        if (syncRes.ok) {
-          console.log('[GOOGLE] Profile synced to backend');
-        }
-      } catch (syncErr: any) {
-        console.warn('[GOOGLE] Backend sync failed (non-fatal):', syncErr.message);
-      }
-
-      // RC identify
-      try {
-        await rcInitPromiseRef.current;
-        await Purchases.logIn(googleUserId);
-        const offerings = await Purchases.getOfferings();
-        cachedOfferingsRef.current = offerings;
-      } catch (rcErr: any) {
-        console.warn('[RC] logIn failed:', rcErr.message);
-      }
-
-      // Push notifications
-      const pushToken = await registerForPushNotifications();
-
-      // Persist locally
-      await persistSession({ googleUserId, email, displayName, pushToken });
-
-      // Tell web app
-      sendToWeb({
-        type: 'GOOGLE_SIGN_IN_SUCCESS',
-        googleUserId,
-        email,
-        displayName,
-        idToken,
-        platform: 'android',
-      });
-
-    } catch (err: any) {
-      if (err.code === statusCodes.SIGN_IN_CANCELLED) {
-        console.log('[GOOGLE] User cancelled sign-in');
-        sendToWeb({ type: 'GOOGLE_SIGN_IN_CANCELLED' });
-      } else if (err.code === statusCodes.IN_PROGRESS) {
-        console.log('[GOOGLE] Sign-in already in progress');
-      } else if (err.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
-        console.error('[GOOGLE] Play Services not available');
-        sendToWeb({ type: 'GOOGLE_SIGN_IN_ERROR', error: 'Google Play Services not available on this device.' });
-      } else {
-        console.error('[GOOGLE] Sign-in error:', err.message);
-        sendToWeb({ type: 'GOOGLE_SIGN_IN_ERROR', error: err.message ?? 'Sign-in failed. Please try again.' });
-      }
-    } finally {
-      googleSignInActiveRef.current = false;
+    if (activeScreen === 'memory') {
+      setActiveScreen('home');
+      return true;
     }
-  };
+    if (activeScreen === 'notifications') {
+      setActiveScreen('settings');
+      return true;
+    }
+    if (activeScreen === 'admin') {
+      setActiveScreen('settings');
+      return true;
+    }
+    return false;
+  }
+  useAndroidBackHandler(handleTopLevelAndroidBack);
 
-  // ─── Handle Google Sign-Out ───────────────────────────────────────────────
-  const handleGoogleSignOut = async () => {
-    try {
-      await GoogleSignin.signOut();
-      await AsyncStorage.multiRemove([
-        STORAGE_KEY_GOOGLE_ID, STORAGE_KEY_EMAIL, STORAGE_KEY_IS_PREMIUM,
-        STORAGE_KEY_PLAN, STORAGE_KEY_ONBOARDING,
+  // Load local age-gate/consent flags and attempt to silently recover an
+  // existing backend session. This does not decide new-vs-returning by
+  // itself -- it only determines whether auth is already complete.
+  useEffect(() => {
+    let mounted = true;
+
+    if (bypassSplash) return undefined;
+
+    async function loadLocalStatus() {
+      const [ageVerified, consentAccepted, consentVersion] = await Promise.all([
+        getSecureItem('onboarding.ageVerified'),
+        getSecureItem('onboarding.privacyConsentAccepted'),
+        getSecureItem('onboarding.privacyConsentVersion'),
       ]);
-      // Reset RevenueCat to anonymous so the next sign-in gets a clean identity
-      try {
-        await rcInitPromiseRef.current;
-        await Purchases.logOut();
-      } catch (rcErr: any) {
-        console.warn('[RC] logOut failed (non-fatal):', rcErr.message);
-      }
-      sendToWeb({ type: 'GOOGLE_SIGN_OUT_SUCCESS' });
-    } catch (e: any) {
-      console.warn('[GOOGLE] Sign-out error:', e.message);
+      const startupAuth = await restoreStartupAuthSession();
+      if (!mounted) return;
+
+      setStartupAuthStatus(startupAuth.status);
+      setOnboardingStatus((current) => ({
+        ...current,
+        ageGateComplete: ageVerified === 'true',
+        authComplete: startupAuth.status === 'authenticated',
+        privacyConsentComplete:
+          consentAccepted === 'true' && consentVersion === PRIVACY_CONSENT_VERSION,
+      }));
+      setStatusLoaded(true);
     }
-  };
 
-  // ─── Handle purchases ─────────────────────────────────────────────────────
-  const handlePurchase = async (productId: string) => {
-    try {
-      await rcInitPromiseRef.current;
-      let offerings = cachedOfferingsRef.current;
-      if (!offerings) {
-        offerings = await Purchases.getOfferings();
-        cachedOfferingsRef.current = offerings;
+    void loadLocalStatus();
+
+    return () => {
+      mounted = false;
+    };
+  }, [bypassSplash]);
+
+  // The single backend account lookup: runs exactly once per completed auth,
+  // and decides new vs. returning vs. blocked. Never falls through to a menu
+  // on its own -- callers gate on `accountResolution`.
+  useEffect(() => {
+    if (!statusLoaded) return undefined;
+    if (!onboardingStatus.authComplete) return undefined;
+    if (accountResolution !== null) return undefined;
+
+    let cancelled = false;
+
+    async function resolveAccount() {
+      setAccountResolution('pending');
+
+      let diagnostic: ProfileDiagnosticResult;
+      try {
+        diagnostic = await withTimeout(runProfileDiagnostic(), ACCOUNT_LOOKUP_TIMEOUT_MS);
+      } catch {
+        diagnostic = unavailableProfileDiagnostic();
       }
+      if (cancelled) return;
 
-      // Find the package by product ID across all offerings
-      let targetPackage = null;
-      const allOfferings = Object.values(offerings.all);
-      for (const offering of allOfferings) {
-        for (const pkg of offering.availablePackages) {
-          if (pkg.product.identifier === productId) {
-            targetPackage = pkg;
-            break;
-          }
-        }
-        if (targetPackage) break;
+      const decision = classifyProfileDiagnostic(diagnostic);
+      if (decision === 'allow') {
+        setAccountResolution('returning');
+        void refreshRestoration();
+      } else if (decision === 'not_found') {
+        setAccountResolution('new');
+      } else {
+        setAccountResolution('blocked');
       }
+      setIsRestoreRetrying(false);
+    }
 
-      if (!targetPackage && offerings.current) {
-        for (const pkg of offerings.current.availablePackages) {
-          if (pkg.product.identifier === productId) {
-            targetPackage = pkg;
-            break;
-          }
-        }
-      }
+    void resolveAccount();
 
-      if (!targetPackage) {
-        sendToWeb({ type: 'PURCHASE_ERROR', error: `Product ${productId} not found in offerings` });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountResolution, onboardingStatus.authComplete, statusLoaded]);
+
+  // Once restoration finishes for a returning account, hydrate the legacy
+  // per-screen storage keys and detect a total restoration failure (no
+  // remote data and no usable cache) rather than silently falling through
+  // to Main Menu with a blank profile.
+  useEffect(() => {
+    if (accountResolution !== 'returning') return;
+    if (restoration.status !== 'ready') return;
+
+    async function settleReturningRestoration() {
+      if (!restoration.profile.data && restoration.profile.source === 'unavailable') {
+        setAccountResolution('blocked');
         return;
       }
 
-      const { customerInfo } = await Purchases.purchasePackage(targetPackage);
-      const isPremium = typeof customerInfo.entitlements.active['unfiltr by javier Pro'] !== 'undefined';
-      const plan = isPremium ? (productId.includes('annual') || productId.includes('yearly') ? 'annual' : 'monthly') : null;
-
-      await persistSession({ isPremium, plan });
-      sendToWeb({ type: 'PURCHASE_SUCCESS', isPremium, plan, productId, customerInfo });
-
-    } catch (err: any) {
-      if (err.userCancelled) {
-        sendToWeb({ type: 'PURCHASE_CANCELLED' });
-      } else {
-        console.error('[RC] Purchase error:', err.message);
-        sendToWeb({ type: 'PURCHASE_ERROR', error: err.message });
-      }
-    }
-  };
-
-  // ─── Restore purchases ────────────────────────────────────────────────────
-  const handleRestorePurchases = async () => {
-    try {
-      await rcInitPromiseRef.current;
-      const customerInfo = await Purchases.restorePurchases();
-      const isPremium = typeof customerInfo.entitlements.active['unfiltr by javier Pro'] !== 'undefined';
-      await persistSession({ isPremium, plan: isPremium ? 'restored' : null });
-      sendToWeb({ type: 'RESTORE_SUCCESS', isPremium, customerInfo });
-    } catch (err: any) {
-      console.error('[RC] Restore error:', err.message);
-      sendToWeb({ type: 'RESTORE_ERROR', error: err.message });
-    }
-  };
-
-  // ─── Get offerings ────────────────────────────────────────────────────────
-  const handleGetOfferings = async () => {
-    try {
-      await rcInitPromiseRef.current;
-      const offerings = await Purchases.getOfferings();
-      cachedOfferingsRef.current = offerings;
-      sendToWeb({ type: 'OFFERINGS_RESULT', offerings });
-    } catch (err: any) {
-      sendToWeb({ type: 'OFFERINGS_ERROR', error: err.message });
-    }
-  };
-
-  // ─── Message router — handles all messages from the web app ──────────────
-  const handleWebMessage = async (event: any) => {
-    let msg: any;
-    try {
-      msg = JSON.parse(event.nativeEvent.data);
-    } catch {
-      return;
+      if (hydratedAccountIdRef.current === restoration.accountId) return;
+      hydratedAccountIdRef.current = restoration.accountId;
+      await hydrateLocalProfileFromRestoration(restoration.profile.data);
     }
 
-    console.log('[BRIDGE] Message from web:', msg.type);
+    void settleReturningRestoration();
+  }, [
+    accountResolution,
+    restoration.accountId,
+    restoration.profile.data,
+    restoration.profile.source,
+    restoration.status,
+  ]);
 
-    switch (msg.type) {
-      // ── Auth ──
-      case 'SIGN_IN_WITH_GOOGLE':
-        handleGoogleSignIn();
-        break;
-      case 'SIGN_OUT':
-        handleGoogleSignOut();
-        break;
+  // A returning account whose restoration never reaches 'ready' (a hung
+  // request rather than an explicit error) must not leave the resolving
+  // spinner on screen forever with no escape hatch.
+  useEffect(() => {
+    if (accountResolution !== 'returning') return undefined;
+    if (restoration.status === 'ready') return undefined;
 
-      // ── Purchases ──
-      case 'PURCHASE':
-        handlePurchase(msg.productId);
-        break;
-      case 'RESTORE_PURCHASES':
-        handleRestorePurchases();
-        break;
-      case 'GET_OFFERINGS':
-        handleGetOfferings();
-        break;
+    const timer = setTimeout(() => {
+      setAccountResolution((current) => (current === 'returning' ? 'blocked' : current));
+    }, RESTORATION_WAIT_TIMEOUT_MS);
 
-      // ── Session persistence ──
-      case 'SAVE_SESSION':
-        await persistSession({
-          googleUserId: msg.googleUserId,
-          email: msg.email,
-          displayName: msg.displayName,
-          companionId: msg.companionId,
-          onboardingComplete: msg.onboardingComplete,
-          isPremium: msg.isPremium,
-          plan: msg.plan,
-          ageVerified: msg.ageVerified,
-        });
-        break;
+    return () => clearTimeout(timer);
+  }, [accountResolution, restoration.status]);
 
-      // ── Customer info ──
-      case 'GET_CUSTOMER_INFO':
-        try {
-          await rcInitPromiseRef.current;
-          const customerInfo = await Purchases.getCustomerInfo();
-          const isPremium = typeof customerInfo.entitlements.active['unfiltr by javier Pro'] !== 'undefined';
-          sendToWeb({ type: 'CUSTOMER_INFO_RESULT', isPremium, customerInfo });
-        } catch (e: any) {
-          sendToWeb({ type: 'CUSTOMER_INFO_ERROR', error: e.message });
-        }
-        break;
-
-      // ── Session clear (sign-out / reset) ──
-      case 'CLEAR_DATA':
-        try {
-          const allKeys = [
-            STORAGE_KEY_GOOGLE_ID, STORAGE_KEY_ONBOARDING, STORAGE_KEY_DISPLAY_NAME,
-            STORAGE_KEY_COMPANION_ID, STORAGE_KEY_IS_PREMIUM, STORAGE_KEY_PLAN,
-            STORAGE_KEY_AGE_VERIFIED, STORAGE_KEY_EMAIL, STORAGE_KEY_PUSH_TOKEN,
-          ];
-          await AsyncStorage.multiRemove(allKeys);
-          console.log('[NATIVE] 🗑️ Native session cleared (sign-out)');
-        } catch (e: any) {
-          console.warn('[NATIVE] CLEAR_DATA failed:', e.message);
-        }
-        break;
-
-      default:
-        console.warn('[BRIDGE] Unhandled message type:', msg.type, msg);
-    }
-  };
-
-  // ─── Build session-restore injected JS ───────────────────────────────────
-  const buildInjectedJS = () => {
-    if (!sessionData || Object.keys(sessionData).length === 0) return BRIDGE_INIT_JS;
-    const safeData = JSON.stringify(sessionData);
-    const restoreBlock = `
-(function() {
-  try {
-    var session = ${safeData};
-    for (var key in session) {
-      if (session[key] !== null && session[key] !== undefined) {
-        localStorage.setItem(key, session[key]);
-      }
-    }
-    console.log('[BRIDGE] Android session restored to localStorage');
-  } catch(e) {
-    console.warn('[BRIDGE] Session restore failed:', e.message);
+  function retryAccountRestore() {
+    if (isRestoreRetrying) return;
+    hydratedAccountIdRef.current = null;
+    setIsRestoreRetrying(true);
+    setAccountResolution(null);
   }
-})();`;
-    return BRIDGE_INIT_JS + restoreBlock;
-  };
 
-  if (sessionData === null) {
+  function signOutFromAccountRestore() {
+    setIsRestoreRetrying(false);
+    hydratedAccountIdRef.current = null;
+    void handleSignOut({
+      setAccountResolution,
+      setActiveScreen,
+      setChatMessages,
+      setOnboardingStatus,
+      setPremiumReturnTo,
+      setSettingsReturnTo,
+      setStartupAuthStatus,
+    });
+  }
+
+  useEffect(() => {
+    if (Platform.OS === 'web') return undefined;
+
+    function handleResponse(response: Notifications.NotificationResponse) {
+      const identifier = response.notification.request.identifier;
+      if (handledResponseId.current === identifier) return;
+
+      const destination = response.notification.request.content.data?.destination;
+      const nextScreen = responseDestinationToScreen(destination);
+      if (!nextScreen) return;
+
+      handledResponseId.current = identifier;
+      setActiveScreen(nextScreen);
+    }
+
+    void Notifications.getLastNotificationResponseAsync().then(async (response) => {
+      if (!response) return;
+      handleResponse(response);
+      await Notifications.clearLastNotificationResponseAsync();
+    });
+
+    const subscription = Notifications.addNotificationResponseReceivedListener(handleResponse);
+    return () => subscription.remove();
+  }, []);
+
+  if (!splashComplete || !statusLoaded) {
     return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#a855f7" />
-      </View>
+      <ScreenFrame showCenterGuide={showCenterGuide}>
+        <SplashScreen
+          holdForCapture={captureSplash}
+          onComplete={() => (captureSplash ? undefined : setSplashComplete(true))}
+        />
+      </ScreenFrame>
+    );
+  }
+
+  if (!onboardingStatus.ageGateComplete) {
+    return (
+      <ScreenFrame showCenterGuide={showCenterGuide}>
+        <AgeGateScreen
+          onVerified={() =>
+            setOnboardingStatus((current) => ({ ...current, ageGateComplete: true }))
+          }
+        />
+      </ScreenFrame>
+    );
+  }
+
+  if (!onboardingStatus.privacyConsentComplete) {
+    return (
+      <ScreenFrame showCenterGuide={showCenterGuide}>
+        <PrivacyConsentScreen
+          onAccepted={() =>
+            setOnboardingStatus((current) => ({ ...current, privacyConsentComplete: true }))
+          }
+        />
+      </ScreenFrame>
+    );
+  }
+
+  if (!onboardingStatus.authComplete) {
+    const signInInitialError =
+      startupAuthStatus === 'offline'
+        ? 'Could not restore your session because the access server is unavailable. Check your connection and sign in again.'
+        : null;
+    const handleAuthenticated = () => {
+      setStartupAuthStatus('authenticated');
+      setOnboardingStatus((current) => ({ ...current, authComplete: true }));
+    };
+
+    return (
+      <ScreenFrame showCenterGuide={showCenterGuide}>
+        {Platform.OS === 'android' ? (
+          <GoogleSignInScreen
+            initialError={signInInitialError}
+            onAuthenticated={handleAuthenticated}
+          />
+        ) : (
+          <AppleSignInScreen
+            initialError={signInInitialError}
+            onAuthenticated={handleAuthenticated}
+          />
+        )}
+      </ScreenFrame>
+    );
+  }
+
+  // Backend account lookup and restoration resolution -- never show Main
+  // Menu or onboarding creation screens until this has completed or failed
+  // explicitly.
+  if (accountResolution === 'blocked' || isRestoreRetrying) {
+    return (
+      <ScreenFrame showCenterGuide={showCenterGuide}>
+        <AccountRestoreErrorScreen
+          busy={isRestoreRetrying}
+          onRetry={retryAccountRestore}
+          onSignOut={signOutFromAccountRestore}
+        />
+      </ScreenFrame>
+    );
+  }
+
+  if (accountResolution === null || accountResolution === 'pending') {
+    return (
+      <ScreenFrame showCenterGuide={showCenterGuide}>
+        <AccountResolvingView />
+      </ScreenFrame>
+    );
+  }
+
+  if (
+    accountResolution === 'returning' &&
+    (restoration.status !== 'ready' ||
+      (!restoration.profile.data && restoration.profile.source === 'unavailable'))
+  ) {
+    return (
+      <ScreenFrame showCenterGuide={showCenterGuide}>
+        <AccountResolvingView />
+      </ScreenFrame>
+    );
+  }
+
+  if (accountResolution === 'new') {
+    if (!onboardingStatus.nameComplete) {
+      return (
+        <ScreenFrame showCenterGuide={showCenterGuide}>
+          <NameScreen
+            onBack={() => setOnboardingStatus((current) => ({ ...current, authComplete: false }))}
+            onComplete={() =>
+              setOnboardingStatus((current) => ({ ...current, nameComplete: true }))
+            }
+          />
+        </ScreenFrame>
+      );
+    }
+
+    if (!onboardingStatus.findMatchComplete) {
+      return (
+        <ScreenFrame showCenterGuide={showCenterGuide}>
+          <FindMatchScreen
+            onBack={() => setOnboardingStatus((current) => ({ ...current, nameComplete: false }))}
+            onBrowseCompanions={() =>
+              setOnboardingStatus((current) => ({
+                ...current,
+                findMatchComplete: true,
+                matchMode: 'manual',
+              }))
+            }
+            onFindMyMatch={() =>
+              setOnboardingStatus((current) => ({
+                ...current,
+                findMatchComplete: true,
+                matchMode: 'quiz',
+              }))
+            }
+          />
+        </ScreenFrame>
+      );
+    }
+
+    if (onboardingStatus.matchMode === 'quiz' && !onboardingStatus.quizResult) {
+      return (
+        <ScreenFrame showCenterGuide={showCenterGuide}>
+          <CompanionQuizScreen
+            onBack={() =>
+              setOnboardingStatus((current) => ({
+                ...current,
+                findMatchComplete: false,
+                matchMode: null,
+              }))
+            }
+            onComplete={(quizResult) =>
+              setOnboardingStatus((current) => ({
+                ...current,
+                quizResult,
+              }))
+            }
+          />
+        </ScreenFrame>
+      );
+    }
+
+    if (onboardingStatus.matchMode === 'quiz' && onboardingStatus.quizResult) {
+      return (
+        <ScreenFrame showCenterGuide={showCenterGuide}>
+          <QuizMatchRevealScreen
+            onBack={() =>
+              setOnboardingStatus((current) => ({
+                ...current,
+                quizResult: null,
+              }))
+            }
+            onMeetCompanion={() =>
+              setOnboardingStatus((current) => ({
+                ...current,
+                companionSelectionComplete: true,
+                matchMode: null,
+                selectedCompanionId: onboardingStatus.quizResult?.matchId ?? null,
+              }))
+            }
+            onViewAllCompanions={() =>
+              setOnboardingStatus((current) => ({
+                ...current,
+                companionSelectionComplete: false,
+                matchMode: 'manual',
+                quizResult: null,
+                selectedCompanionId: null,
+              }))
+            }
+            result={onboardingStatus.quizResult}
+          />
+        </ScreenFrame>
+      );
+    }
+
+    if (onboardingStatus.matchMode === 'manual' && !onboardingStatus.companionSelectionComplete) {
+      return (
+        <ScreenFrame showCenterGuide={showCenterGuide}>
+          <CompanionSelectionScreen
+            onBack={() =>
+              setOnboardingStatus((current) => ({
+                ...current,
+                findMatchComplete: false,
+                matchMode: null,
+              }))
+            }
+            onCompanionSelected={(companionId) =>
+              setOnboardingStatus((current) => ({
+                ...current,
+                companionSelectionComplete: true,
+                matchMode: null,
+                selectedCompanionId: companionId,
+              }))
+            }
+          />
+        </ScreenFrame>
+      );
+    }
+
+    if (onboardingStatus.companionSelectionComplete && !onboardingStatus.companionNamingComplete) {
+      return (
+        <ScreenFrame showCenterGuide={showCenterGuide}>
+          <CompanionNamingScreen
+            companionId={onboardingStatus.selectedCompanionId ?? 'luna'}
+            onBack={() =>
+              setOnboardingStatus((current) => ({
+                ...current,
+                companionSelectionComplete: false,
+                matchMode: current.quizResult ? 'quiz' : 'manual',
+              }))
+            }
+            onComplete={() =>
+              setOnboardingStatus((current) => ({
+                ...current,
+                companionNamingComplete: true,
+              }))
+            }
+          />
+        </ScreenFrame>
+      );
+    }
+
+    if (onboardingStatus.companionNamingComplete && !onboardingStatus.connectionStyleComplete) {
+      return (
+        <ScreenFrame showCenterGuide={showCenterGuide}>
+          <ConnectionStyleScreen
+            onBack={() =>
+              setOnboardingStatus((current) => ({
+                ...current,
+                companionNamingComplete: false,
+              }))
+            }
+            onComplete={() =>
+              setOnboardingStatus((current) => ({
+                ...current,
+                connectionStyleComplete: true,
+              }))
+            }
+          />
+        </ScreenFrame>
+      );
+    }
+  }
+
+  if (activeScreen === 'chat') {
+    return (
+      <ScreenFrame showCenterGuide={showCenterGuide}>
+        <ChatScreen
+          initialMessages={chatMessages}
+          onBack={() => setActiveScreen('home')}
+          onMessagesChange={setChatMessages}
+          onOpenSettings={() => {
+            setSettingsReturnTo('chat');
+            setActiveScreen('settings');
+          }}
+        />
+      </ScreenFrame>
+    );
+  }
+
+  if (activeScreen === 'journal') {
+    return (
+      <ScreenFrame showCenterGuide={showCenterGuide}>
+        <JournalScreen
+          onBack={() => setActiveScreen('home')}
+          onOpenChat={() => setActiveScreen('chat')}
+          onOpenHome={() => setActiveScreen('home')}
+          onOpenMeditation={() => setActiveScreen('meditation')}
+        />
+      </ScreenFrame>
+    );
+  }
+
+  if (activeScreen === 'meditation') {
+    return (
+      <ScreenFrame showCenterGuide={showCenterGuide}>
+        <MeditationScreen
+          onBack={() => setActiveScreen('home')}
+          onOpenChat={() => setActiveScreen('chat')}
+          onOpenHome={() => setActiveScreen('home')}
+          onOpenJournal={() => setActiveScreen('journal')}
+        />
+      </ScreenFrame>
+    );
+  }
+
+  if (activeScreen === 'memory') {
+    return (
+      <ScreenFrame showCenterGuide={showCenterGuide}>
+        <MemoryScreen onBack={() => setActiveScreen('home')} />
+      </ScreenFrame>
+    );
+  }
+
+  if (activeScreen === 'notifications') {
+    return (
+      <ScreenFrame showCenterGuide={showCenterGuide}>
+        <NotificationsScreen onBack={() => setActiveScreen('settings')} />
+      </ScreenFrame>
+    );
+  }
+
+  if (activeScreen === 'premium') {
+    return (
+      <ScreenFrame showCenterGuide={showCenterGuide}>
+        <PremiumScreen
+          onBack={() => setActiveScreen(premiumReturnTo)}
+          returnTo={premiumReturnTo === 'home' ? 'home' : 'settings'}
+        />
+      </ScreenFrame>
+    );
+  }
+
+  if (activeScreen === 'admin') {
+    return (
+      <ScreenFrame showCenterGuide={showCenterGuide}>
+        <AdminDashboardScreen
+          onBack={() => setActiveScreen('settings')}
+          onLock={() => setActiveScreen('settings')}
+        />
+      </ScreenFrame>
+    );
+  }
+
+  if (activeScreen === 'settings') {
+    return (
+      <ScreenFrame showCenterGuide={showCenterGuide}>
+        <SettingsScreen
+          onBack={() => setActiveScreen(captureSettings ? 'home' : settingsReturnTo)}
+          onSignOut={() => {
+            hydratedAccountIdRef.current = null;
+            void handleSignOut({
+              setAccountResolution,
+              setActiveScreen,
+              setChatMessages,
+              setOnboardingStatus,
+              setPremiumReturnTo,
+              setSettingsReturnTo,
+              setStartupAuthStatus,
+            });
+          }}
+          onOpenNotifications={() => setActiveScreen('notifications')}
+          onOpenPremium={() => {
+            setPremiumReturnTo('settings');
+            setActiveScreen('premium');
+          }}
+        />
+      </ScreenFrame>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      <StatusBar barStyle="light-content" backgroundColor="#0f0f1a" />
-
-      <WebView
-        ref={webViewRef}
-        source={{ uri: APP_URL }}
-        onLoadStart={() => {
-          if (loadTimeoutRef.current) clearTimeout(loadTimeoutRef.current);
-          loadTimeoutRef.current = setTimeout(() => {
-            setLoading(false);
-            setLoadError('Connection timed out. Please check your internet.');
-          }, 20000);
+    <ScreenFrame showCenterGuide={showCenterGuide}>
+      <HomeScreen
+        onOpenChat={() => setActiveScreen('chat')}
+        onOpenJournal={() => setActiveScreen('journal')}
+        onOpenMeditation={() => setActiveScreen('meditation')}
+        onOpenMemory={() => setActiveScreen('memory')}
+        onOpenPremium={() => {
+          setPremiumReturnTo('home');
+          setActiveScreen('premium');
         }}
-        style={styles.webview}
-        injectedJavaScriptBeforeContentLoaded={buildInjectedJS()}
-        onMessage={handleWebMessage}
-        onLoadEnd={async () => {
-          setLoading(false);
-          if (loadTimeoutRef.current) clearTimeout(loadTimeoutRef.current);
-          // Signal RevenueCat billing readiness to the web app once after the initial
-          // page load. rcReadySentRef prevents duplicate signals if onLoadEnd fires
-          // again (e.g. for in-page navigations in some WebView versions).
-          if (!rcReadySentRef.current) {
-            rcReadySentRef.current = true;
-            await rcInitPromiseRef.current;
-            if (rcInitStateRef.current?.ok) {
-              sendToWeb({ type: 'RC_READY' });
-            } else if (rcInitStateRef.current) {
-              sendToWeb({ type: 'RC_INIT_FAILED', error: rcInitStateRef.current.error });
-            }
-          }
-        }}
-        onError={(e) => {
-          setLoadError(e.nativeEvent.description);
-          setLoading(false);
-        }}
-        onHttpError={(e) => {
-          // Only surface 5xx server errors — 4xx are client errors the SPA handles
-          const code = e.nativeEvent.statusCode;
-          if (code >= 500) {
-            setLoadError(`Server error (${code}). Please try again later.`);
-            setLoading(false);
-          }
-        }}
-        onRenderProcessGone={() => {
-          // Android killed the WebView renderer (OOM etc.) — reload to recover
-          setLoadError('The page crashed. Tap Retry to reload.');
-          setLoading(false);
-        }}
-        javaScriptEnabled={true}
-        domStorageEnabled={true}
-        allowsInlineMediaPlayback={true}
-        mediaPlaybackRequiresUserAction={false}
-        startInLoadingState={true}
-        originWhitelist={['https://*', 'http://*']}
-        allowsBackForwardNavigationGestures={false}
-        userAgent="UnfiltrAndroid/1.0"
-        onShouldStartLoadWithRequest={(request) => {
-          const url = request.url;
-          // Allow app origin, blank, data URIs, and Google auth flows
-          if (url.startsWith(APP_ORIGIN)) return true;
-          if (url === 'about:blank') return true;
-          if (url.startsWith('data:')) return true;
-          if (url.startsWith('https://accounts.google.com')) return true;
-          if (url.startsWith('https://oauth2.googleapis.com')) return true;
-          if (url.startsWith('https://www.googleapis.com')) return true;
-          // Allow Google Pay and Play Billing redirect URLs.
-          // Use anchored regex to prevent prefix-matching attacks like
-          // https://pay.google.com.evil.com — the path component must start with /
-          // or the URL must be exactly the origin.
-          if (/^https:\/\/pay\.google\.com(\/|$)/.test(url)) return true;
-          if (/^https:\/\/checkout\.google\.com(\/|$)/.test(url)) return true;
-          // Block everything else (external links etc)
-          console.warn('[BRIDGE] Blocked navigation to:', url);
-          return false;
+        onOpenSettings={() => {
+          setSettingsReturnTo('home');
+          setActiveScreen('settings');
         }}
       />
-
-      {loading && (
-        <View style={styles.loadingOverlay}>
-          <ActivityIndicator size="large" color="#a855f7" />
-        </View>
-      )}
-
-      {loadError && (
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>Couldn't connect. Check your internet.</Text>
-          <TouchableOpacity
-            style={styles.retryButton}
-            onPress={() => {
-              setLoadError(null);
-              setLoading(true);
-              rcReadySentRef.current = false;
-              webViewRef.current?.reload();
-            }}
-          >
-            <Text style={styles.retryText}>Retry</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-    </SafeAreaView>
+    </ScreenFrame>
   );
 }
 
+/**
+ * Account-safe sign-out. This replaces two prior bugs:
+ *  - the build-67 behavior, which reset onboarding but left ageGate/consent
+ *    keys such that the next screen shown depended on ordering accidents;
+ *  - the (unmerged) branch's stale-data-preserving behavior, which kept the
+ *    outgoing account's companion/name/relationship data in local storage
+ *    and hardcoded onboarding completion flags to true for whoever signed
+ *    in next.
+ *
+ * Every field a restored profile can hydrate (see hydrateLocalProfile.ts)
+ * is cleared here, so a different Apple account signing in afterward can
+ * never see the outgoing account's data, and the same account signing back
+ * in is re-verified against the backend from scratch (see the account
+ * resolution effects above) rather than trusted from stale local state.
+ */
+async function handleSignOut({
+  setAccountResolution,
+  setActiveScreen,
+  setChatMessages,
+  setOnboardingStatus,
+  setPremiumReturnTo,
+  setSettingsReturnTo,
+  setStartupAuthStatus,
+}: {
+  setAccountResolution: Dispatch<SetStateAction<AccountResolution | null>>;
+  setActiveScreen: (screen: AppScreen) => void;
+  setChatMessages: Dispatch<SetStateAction<ChatMessage[]>>;
+  setOnboardingStatus: Dispatch<SetStateAction<OnboardingStatus>>;
+  setPremiumReturnTo: (screen: AppScreen) => void;
+  setSettingsReturnTo: (screen: AppScreen) => void;
+  setStartupAuthStatus: Dispatch<SetStateAction<StartupAuthStatus>>;
+}) {
+  // clearRestorationForSignOut() clears the *outgoing* account's namespaced
+  // cache by first reading auth.appleUserId/userId/profileId to find out
+  // which account that is -- it must run before clearRememberedAccountIdentity
+  // erases those same keys, or the account-scoped cache clear silently
+  // no-ops and the next account to sign in on this device could read the
+  // outgoing account's cached chat/journal/memory/profile.
+  //
+  // 1. Revoke/clear the authenticated session and tokens.
+  if (Platform.OS === 'android') {
+    await signOutGoogleAndroid().catch(() => undefined);
+  }
+  await signOutRevenueCat();
+  await clearRestorationForSignOut();
+  await clearAuthenticatedSession();
+  await clearRememberedAccountIdentity();
+
+  // 2. Clear all remaining account-specific local and secure cached data.
+  await clearAllAccountSpecificData();
+
+  // 3. Reset active navigation state.
+  setActiveScreen('home');
+  setSettingsReturnTo('home');
+  setPremiumReturnTo('home');
+  setChatMessages([]);
+
+  // 4-7. Return to Age Gate, then Policy Consent, then platform Sign-In --
+  // initialOnboardingStatus has ageGateComplete/privacyConsentComplete/
+  // authComplete all false, and accountResolution(null) means the next
+  // completed auth is checked against the backend from scratch before any
+  // onboarding screen is skipped.
+  setStartupAuthStatus('unauthenticated');
+  setAccountResolution(null);
+  setOnboardingStatus(initialOnboardingStatus);
+}
+
+async function clearAllAccountSpecificData(): Promise<void> {
+  await Promise.all([
+    // Age gate / consent -- clearing these is what sends the next session
+    // back through Age Gate and Policy Consent before sign-in.
+    deleteSecureItem('onboarding.ageVerified'),
+    deleteSecureItem('onboarding.privacyConsentAccepted'),
+    deleteSecureItem('onboarding.privacyConsentVersion'),
+
+    // Display name.
+    deleteSecureItem('onboarding.displayName'),
+    deleteAppStorageItem('unfiltr_display_name'),
+
+    // Selected companion / companion nickname.
+    deleteSecureItem('onboarding.matchMode'),
+    deleteSecureItem('onboarding.selectedCompanionId'),
+    deleteSecureItem('onboarding.companionNickname'),
+    deleteSecureItem('onboarding.quizCompanionId'),
+    deleteSecureItem('onboarding.companionId'),
+    deleteSecureItem('onboarding.companionPayload'),
+    deleteAppStorageItem('unfiltr_companion_id'),
+    deleteAppStorageItem('unfiltr_companion_nickname'),
+    deleteAppStorageItem('unfiltr_companion'),
+
+    // Relationship mode / personality / tone.
+    deleteSecureItem('onboarding.relationshipMode'),
+    deleteSecureItem('onboarding.personalityVibe'),
+    deleteSecureItem('onboarding.personalityStyle'),
+    deleteSecureItem('onboarding.personalityHumor'),
+    deleteSecureItem('onboarding.personalityEmpathy'),
+    deleteAppStorageItem('unfiltr_relationship_mode'),
+    deleteAppStorageItem('unfiltr_voice_personality'),
+    deleteAppStorageItem('unfiltr_appearance_preferences'),
+
+    // Chat-specific local state (private session flag and chat background
+    // selection; cached chat history itself is cleared by
+    // clearRestorationForSignOut's account-scoped cache).
+    deleteAppStorageItem('unfiltr_private_session'),
+    deleteAppStorageItem('unfiltr_chat_messages'),
+    deleteAppStorageItem('unfiltr_background_id'),
+
+    // Premium identity/cache. RevenueCat's own identity is cleared by
+    // signOutRevenueCat(); these are the derived entitlement/usage caches
+    // that resolvePremiumAccess() writes and that must not leak the
+    // outgoing account's tier to whoever signs in next.
+    deleteSecureItem('unfiltr_is_premium'),
+    deleteAppStorageItem('unfiltr_is_premium'),
+    deleteSecureItem('unfiltr_effective_tier'),
+    deleteAppStorageItem('unfiltr_effective_tier'),
+    deleteSecureItem('unfiltr_family_unlock'),
+    deleteAppStorageItem('unfiltr_family_unlock'),
+    deleteSecureItem('unfiltr_family_unlimited'),
+    deleteAppStorageItem('unfiltr_family_unlimited'),
+    deleteSecureItem('unfiltr_unlimited'),
+    deleteAppStorageItem('unfiltr_unlimited'),
+    deleteSecureItem('unfiltr_msg_usage'),
+  ]);
+}
+
+function responseDestinationToScreen(value: unknown): AppScreen | null {
+  if (value === 'chat' || value === 'unfiltr_notifications_companion') return 'chat';
+  if (value === 'journal' || value === 'unfiltr_notifications_journal') return 'journal';
+  if (
+    value === 'home' ||
+    value === 'unfiltr_notifications_daily_checkin' ||
+    value === 'account' ||
+    value === 'system'
+  ) {
+    return 'home';
+  }
+  return null;
+}
+
 const styles = StyleSheet.create({
-  container: {
+  screenFrame: {
     flex: 1,
-    backgroundColor: '#0f0f1a',
   },
-  webview: {
-    flex: 1,
-    backgroundColor: '#0f0f1a',
+  centerGuide: {
+    position: (Platform.OS === 'web' ? 'fixed' : 'absolute') as 'absolute',
+    top: 0,
+    bottom: 0,
+    left: (Platform.OS === 'web' ? '50vw' : '50%') as '50%',
+    width: 1,
+    transform: [{ translateX: -0.5 }],
+    backgroundColor: '#FF0000',
+    zIndex: 9999,
   },
-  loadingContainer: {
+  resolvingRoot: {
     flex: 1,
-    backgroundColor: '#0f0f1a',
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: '#05020D',
+    gap: 16,
   },
-  loadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#0f0f1a',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  errorContainer: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#0f0f1a',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 32,
-  },
-  errorText: {
-    color: '#fff',
-    fontSize: 16,
-    textAlign: 'center',
-    marginBottom: 24,
-  },
-  retryButton: {
-    backgroundColor: '#a855f7',
-    paddingHorizontal: 32,
-    paddingVertical: 14,
-    borderRadius: 12,
-  },
-  retryText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '700',
+  resolvingText: {
+    color: 'rgba(255,255,255,0.62)',
+    fontSize: 14,
+    fontWeight: '600',
   },
 });
-
-
