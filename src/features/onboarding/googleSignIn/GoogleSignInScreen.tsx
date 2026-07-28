@@ -4,7 +4,7 @@ import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'rea
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { env } from '@/config';
-import { exchangeGoogleIdentityToken } from '@/lib/auth/session';
+import { exchangeGoogleIdentityToken, GoogleSessionExchangeError } from '@/lib/auth/session';
 import { setSecureItem } from '@/lib/storage';
 import {
   AndroidGoogleAuthError,
@@ -32,6 +32,28 @@ function GoogleSignInBackground({ children }: PropsWithChildren) {
 }
 
 const MISSING_CLIENT_ID_ERROR = 'Google Sign In is not configured for this build.';
+
+// Server-side codes from api/auth/google.js (see restorationDiagnostics.ts
+// for the equivalent client-side stage names). Any code not listed here
+// still shows -- appended to the generic message -- rather than being
+// swallowed into an unactionable "check your connection" dead end.
+const GOOGLE_EXCHANGE_ERROR_MESSAGES: Record<string, string> = {
+  MISSING_TOKEN: 'Google did not return an identity token. Please try signing in again.',
+  INVALID_AUDIENCE: 'This build is not authorized for Google Sign In. Please contact support.',
+  INVALID_ISSUER: 'Google Sign In returned an unrecognized response. Please try again.',
+  TOKEN_EXPIRED: 'Your Google sign-in expired before it reached Unfiltr. Please try again.',
+  GOOGLE_VERIFICATION_FAILED: 'Could not verify your Google sign-in. Please try again.',
+  GOOGLE_AUTH_UNAVAILABLE: 'Google Sign In is temporarily unavailable. Please try again shortly.',
+  SERVER_NOT_CONFIGURED: 'Unfiltr is not ready to accept sign-ins right now. Please try again shortly.',
+  SESSION_ISSUANCE_FAILED: 'Could not start your Unfiltr session. Please try again.',
+  MALFORMED_RESPONSE: 'Unfiltr returned an unexpected response. Please try again.',
+};
+
+function describeGoogleExchangeError(error: GoogleSessionExchangeError): string {
+  const known = GOOGLE_EXCHANGE_ERROR_MESSAGES[error.code];
+  if (known) return `${known} (${error.code})`;
+  return `Could not verify your Google sign-in with Unfiltr. Check your connection and try again. (${error.code})`;
+}
 
 export function GoogleSignInScreen({ initialError, onAuthenticated }: GoogleSignInScreenProps) {
   const [isSigningIn, setIsSigningIn] = useState(false);
@@ -80,9 +102,11 @@ export function GoogleSignInScreen({ initialError, onAuthenticated }: GoogleSign
       let session;
       try {
         session = await exchangeGoogleIdentityToken(account.idToken, { persist: false });
-      } catch {
+      } catch (exchangeError) {
         setError(
-          'Could not verify your Google sign-in with Unfiltr. Check your connection and try again.',
+          exchangeError instanceof GoogleSessionExchangeError
+            ? describeGoogleExchangeError(exchangeError)
+            : 'Could not verify your Google sign-in with Unfiltr. Check your connection and try again.',
         );
         return;
       }

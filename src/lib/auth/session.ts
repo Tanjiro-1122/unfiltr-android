@@ -15,6 +15,25 @@ type GoogleSessionResponse = {
   expiresAt?: number;
 };
 
+type GoogleSessionErrorResponse = {
+  error?: string;
+  code?: string;
+};
+
+// Carries the backend's safe diagnostic code (e.g. INVALID_AUDIENCE,
+// TOKEN_EXPIRED, GOOGLE_AUTH_UNAVAILABLE -- see api/auth/google.js) so the
+// UI can show something more actionable than a generic connection error,
+// without exposing the token or session secret either side of the wire.
+export class GoogleSessionExchangeError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'GoogleSessionExchangeError';
+  }
+}
+
 export type BackendSession = {
   accessToken: string;
   appleUserId: string;
@@ -105,9 +124,17 @@ export async function exchangeGoogleIdentityToken(
     body: JSON.stringify({ idToken }),
   });
 
+  if (!response.ok) {
+    const errorBody = (await response.json().catch(() => null)) as GoogleSessionErrorResponse | null;
+    throw new GoogleSessionExchangeError(
+      errorBody?.code || 'UNKNOWN_ERROR',
+      errorBody?.error || 'Google session exchange failed.',
+    );
+  }
+
   const body = (await response.json().catch(() => null)) as GoogleSessionResponse | null;
-  if (!response.ok || !body?.accessToken) {
-    throw new Error('Google session exchange failed.');
+  if (!body?.accessToken) {
+    throw new GoogleSessionExchangeError('MALFORMED_RESPONSE', 'Google session exchange failed.');
   }
 
   const expiresAt = normalizeExpiry(body.expiresAt, body.accessToken);

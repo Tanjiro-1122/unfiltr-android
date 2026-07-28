@@ -9,7 +9,7 @@
     "userInterfaceStyle": "dark",
     "android": {
       "package": "com.huertas.unfiltr",
-      "versionCode": 21,
+      "versionCode": 23,
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "backgroundColor": "#06020F",
