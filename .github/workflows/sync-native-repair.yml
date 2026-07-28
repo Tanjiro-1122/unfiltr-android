@@ -1,0 +1,84 @@
+name: Sync repaired native source
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - android/sync-ios-repair
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-native-sync
+  cancel-in-progress: false
+
+jobs:
+  sync-and-verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out Android migration branch
+        uses: actions/checkout@v4
+        with:
+          ref: android/sync-ios-repair
+          fetch-depth: 0
+
+      - name: Check out repaired native source
+        uses: actions/checkout@v4
+        with:
+          repository: Tanjiro-1122/unfiltr-native
+          ref: repair/post-build67-fixes
+          path: native-source
+          fetch-depth: 0
+
+      - name: Put source checkout on the expected branch
+        working-directory: native-source
+        run: git checkout repair/post-build67-fixes
+
+      - name: Configure Git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Sync repaired native application
+        run: node scripts/sync-native-source.mjs --source ./native-source --apply
+
+      - name: Remove temporary source checkout
+        run: rm -rf native-source
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm run test:unit
+
+      - name: Release-safety tests
+        run: npm run test:release
+
+      - name: Expo Doctor
+        run: npm run doctor
+
+      - name: Android export smoke test
+        run: npx expo export --platform android --output-dir dist/android
+
+      - name: Remove generated export
+        run: rm -rf dist
+
+      - name: Commit verified native sync
+        run: |
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "No source changes to commit."
+            exit 0
+          fi
+          git add app src tests assets package-lock.json
+          git commit -m "feat(android): replace WebView wrapper with repaired native app [native-sync]"
+          git push origin HEAD:android/sync-ios-repair
