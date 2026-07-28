@@ -8,6 +8,7 @@ import { env } from '@/config';
 import { hasActiveAdminAccess } from '@/lib/admin/adminAccess';
 import { apiClient, getLastApiDiagnostics } from '@/lib/api';
 import { isBackendSessionValid } from '@/lib/auth/session';
+import { getRestorationDiagnostics } from '@/lib/diagnostics/restorationDiagnostics';
 import { resolvePremiumAccess } from '@/lib/purchases/access';
 import { getSecureItem } from '@/lib/storage';
 import { getAppStorageItem } from '@/lib/storage/appStorage';
@@ -122,6 +123,7 @@ export function InternalDiagnosticsScreen({ onBack }: InternalDiagnosticsScreenP
       { label: 'Admin role', value: adminActive ? 'unlocked' : 'locked' },
       { label: 'Last request ID', value: apiDiagnostics.lastRequestId || 'none' },
       { label: 'Last safe error code', value: apiDiagnostics.lastSafeErrorCode || 'none' },
+      { label: 'Restoration stage timeline', value: formatRestorationTimeline() },
     ]);
     setLoading(false);
   }, []);
@@ -166,6 +168,16 @@ export function InternalDiagnosticsScreen({ onBack }: InternalDiagnosticsScreenP
       )}
     </SafeAreaView>
   );
+}
+
+function formatRestorationTimeline(): string {
+  const entries = getRestorationDiagnostics();
+  if (!entries.length) return 'none recorded this session';
+
+  return entries
+    .slice(-10)
+    .map((entry) => `${entry.stage}${entry.detail ? `(${entry.detail})` : ''}`)
+    .join(' -> ');
 }
 
 function flag(value: string | null): string {

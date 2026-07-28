@@ -55,3 +55,16 @@ The conversion will therefore preserve Android release identity and services whi
 ## Automation
 
 A push to `android/sync-ios-repair` triggers the guarded native-source synchronization workflow. The workflow may commit the synchronized native app only after typecheck, lint, unit tests, release tests, Expo Doctor, and Android export all pass.
+
+## Re-syncing after this repo already has Android-specific edits
+
+`scripts/sync-native-source.mjs` wholesale-replaces `app/` and `src/` with the iOS source on every run. `ANDROID_OVERLAY_PATHS` snapshots and restores directories that exist **only** in this repo (currently `src/platform/android`, `src/features/onboarding/googleSignIn`, `src/lib/navigation`) -- safe because iOS never touches them.
+
+It cannot protect files that exist in **both** repos where this repo has Android-specific edits merged into shared iOS logic. Re-running the sync overwrites these with the plain iOS version and silently drops the Android edits:
+
+- `app/index.tsx` -- Google vs. Apple sign-in screen branch, the top-level Android hardware-back handler, `signOutGoogleAndroid()` in `handleSignOut`
+- `src/features/chat/ChatScreen.tsx` -- Android hardware-back handler (closes the world picker / options sheet before leaving chat)
+- `src/features/journal/JournalScreen.tsx` -- Android hardware-back handler (mode stack)
+- `src/features/meditation/MeditationScreen.tsx` -- Android hardware-back handler (mirrors End Session during an active session)
+
+After every `--apply` run, reapply these four patches by hand (or diff against the previous commit's versions of these files to see exactly what to reapply) before running validation.

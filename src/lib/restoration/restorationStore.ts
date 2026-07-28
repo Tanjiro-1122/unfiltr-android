@@ -1,6 +1,11 @@
 import { useSyncExternalStore } from 'react';
 
+import { TimeoutError, withTimeout } from '@/lib/async/withTimeout';
 import type { SyncedChatMessage } from '@/lib/chat/history';
+import {
+  clearRestorationDiagnostics,
+  recordRestorationStage,
+} from '@/lib/diagnostics/restorationDiagnostics';
 import type { RemoteJournalEntry } from '@/lib/journal/remoteJournal';
 import type { RemoteProfile } from '@/lib/profile/remoteProfile';
 import {
@@ -16,6 +21,13 @@ import {
   type RestoredJournalEntry,
   type StartupRestorationResult,
 } from '@/lib/restoration/startupRestoration';
+
+// A hard backstop independent of the per-request fetch timeouts: even if
+// every underlying request individually times out and falls through its own
+// legacy-fallback retry, restoration as a whole must still settle quickly
+// enough that the UI-level spinner timeout in app/index.tsx never has to be
+// the one to rescue the user.
+export const RESTORATION_HARD_TIMEOUT_MS = 15000;
 
 export type RestorationLoadStatus = 'idle' | 'loading' | 'ready';
 
@@ -45,6 +57,12 @@ let state: RestorationState = {
 let restorePromise: Promise<StartupRestorationResult | null> | null = null;
 const listeners = new Set<() => void>();
 
+// Non-hook access to the same snapshot useRestoration reads, for callers
+// (and tests) outside a component render.
+export function getRestorationSnapshot(): RestorationState {
+  return getSnapshot();
+}
+
 export function useRestoration(): RestorationState {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
@@ -54,15 +72,21 @@ export async function refreshRestoration(): Promise<StartupRestorationResult | n
 
   const accountId = await getCurrentAccountId();
   setState({ accountId, status: 'loading' });
+  recordRestorationStage('restoration-start');
 
-  restorePromise = restoreStartupAccountData()
+  restorePromise = withTimeout(restoreStartupAccountData(), RESTORATION_HARD_TIMEOUT_MS)
     .then(async (result) => {
       const next = normalizeRestorationResult(result, accountId);
       setState(next);
       await writeRemoteCaches(next);
+      recordRestorationStage('restoration-ready');
       return result;
     })
     .catch(async (error: unknown) => {
+      recordRestorationStage(
+        error instanceof TimeoutError ? 'restoration-timeout' : 'restoration-failed',
+        error instanceof Error ? error.name : undefined,
+      );
       const cached = await readCachedState(
         accountId,
         summarizeError('Startup restoration failed', error),
@@ -102,6 +126,7 @@ export async function updateCachedJournalEntries(entries: RemoteJournalEntry[]):
 
 export async function clearRestorationForSignOut(): Promise<void> {
   await clearCurrentAccountCache();
+  clearRestorationDiagnostics();
   state = {
     accountId: null,
     chatHistory: emptyData<SyncedChatMessage[]>(),

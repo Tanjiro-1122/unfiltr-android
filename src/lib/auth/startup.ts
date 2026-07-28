@@ -6,6 +6,7 @@ import {
   exchangeGoogleIdentityToken,
   getValidAccessToken,
 } from '@/lib/auth/session';
+import { recordRestorationStage } from '@/lib/diagnostics/restorationDiagnostics';
 import { getSecureItem } from '@/lib/storage';
 
 export type StartupAuthStatus = 'authenticated' | 'offline' | 'unauthenticated';
@@ -29,13 +30,19 @@ export async function restoreStartupAuthSession(): Promise<StartupAuthResult> {
       return { recovered: false, status: 'unauthenticated' };
     }
 
+    recordRestorationStage('auth-recovery-start', 'startup');
     if (appleIdentityToken) {
       await exchangeAppleIdentityToken(appleIdentityToken);
     } else {
       await exchangeGoogleIdentityToken(googleIdentityToken!);
     }
+    recordRestorationStage('auth-recovery-success', 'startup');
     return { recovered: true, status: 'authenticated' };
   } catch (error) {
+    recordRestorationStage(
+      isTemporaryNetworkError(error) ? 'auth-recovery-timeout' : 'auth-recovery-failed',
+      'startup',
+    );
     if (isTemporaryNetworkError(error)) {
       return {
         error:

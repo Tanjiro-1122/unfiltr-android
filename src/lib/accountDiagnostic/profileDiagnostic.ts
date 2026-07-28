@@ -1,5 +1,6 @@
 import { env } from '@/config';
 import { apiClient } from '@/lib/api/client';
+import { fetchWithTimeout } from '@/lib/api/fetchWithTimeout';
 
 export type ProfileDiagnosticStatus =
   'ambiguous' | 'found' | 'not_found' | 'ok' | 'unavailable' | string;
@@ -52,7 +53,7 @@ export function unavailableProfileDiagnostic(): ProfileDiagnosticResult {
 async function postDiagnosticWithToken(accessToken: string): Promise<unknown> {
   if (!env.apiBaseUrl) throw new Error('API base URL is not configured.');
 
-  const response = await fetch(`${env.apiBaseUrl}/api/profile-diagnostic`, {
+  const response = await fetchWithTimeout(`${env.apiBaseUrl}/api/profile-diagnostic`, {
     method: 'POST',
     headers: {
       Accept: 'application/json',

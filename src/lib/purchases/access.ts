@@ -1,3 +1,5 @@
+import { withTimeout } from '@/lib/async/withTimeout';
+import { recordRestorationStage } from '@/lib/diagnostics/restorationDiagnostics';
 import {
   getRevenueCatState,
   getRevenueCatTier,
@@ -5,6 +7,12 @@ import {
 } from '@/lib/purchases/revenueCat';
 import { getSecureItem, setSecureItem, type SecureStorageKey } from '@/lib/storage';
 import { getAppStorageItem, setAppStorageItem } from '@/lib/storage/appStorage';
+
+// RevenueCat's SDK calls are native, not fetch(), so fetchWithTimeout can't
+// bound them -- this is the only backstop against a hung Purchases call
+// silently blocking whatever awaited resolvePremiumAccess (premium status
+// display, chat tier enforcement, and potentially account restoration).
+const REVENUECAT_SYNC_TIMEOUT_MS = 8000;
 
 const SPECIAL_ACCESS_KEYS = [
   'unfiltr_family_unlock',
@@ -46,11 +54,22 @@ export async function resolvePremiumAccess(
   let revenueCatTier = await readStoredRevenueCatTier();
 
   if (options.refreshRevenueCat !== false) {
+    recordRestorationStage('revenuecat-sync-start');
     try {
-      const { customerInfo } = await getRevenueCatState();
+      const { customerInfo } = await withTimeout(
+        getRevenueCatState(),
+        REVENUECAT_SYNC_TIMEOUT_MS,
+      );
       revenueCatTier = getRevenueCatTier(customerInfo);
-    } catch {
-      // Keep the last verified RevenueCat tier while offline or during a temporary SDK failure.
+      recordRestorationStage('revenuecat-sync-success');
+    } catch (error) {
+      // Keep the last verified RevenueCat tier while offline, during a
+      // temporary SDK failure, or if the native call itself hangs.
+      recordRestorationStage(
+        error instanceof Error && error.name === 'TimeoutError'
+          ? 'revenuecat-sync-timeout'
+          : 'revenuecat-sync-failed',
+      );
     }
   }
 

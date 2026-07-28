@@ -21,6 +21,9 @@ const optionsHubScreen = await read('src/features/settings/OptionsHubScreen.tsx'
 const memoryScreen = await read('src/features/memory/MemoryScreen.tsx');
 const meditationScreen = await read('src/features/meditation/MeditationScreen.tsx');
 const sessionLifecycle = await read('src/lib/meditation/sessionLifecycle.ts');
+const restorationStore = await read('src/lib/restoration/restorationStore.ts');
+const withTimeoutSource = await read('src/lib/async/withTimeout.ts');
+const fetchWithTimeoutSource = await read('src/lib/api/fetchWithTimeout.ts');
 
 test('onboarding order stays Splash -> Age -> Consent -> Sign-In -> account resolution -> (new: Name -> questionnaire/manual avatar -> companion -> naming -> style) -> app', () => {
   assertOrder(appIndex, [
@@ -161,7 +164,16 @@ test('restoration failure or an indefinite hang is never silently shown as Main 
   assertIncludes(appIndex, "setAccountResolution('blocked');");
   assertIncludes(appIndex, 'RESTORATION_WAIT_TIMEOUT_MS');
   assertIncludes(appIndex, 'ACCOUNT_LOOKUP_TIMEOUT_MS');
-  assertIncludes(appIndex, 'function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {');
+  assertIncludes(appIndex, "import { TimeoutError, withTimeout } from '@/lib/async/withTimeout';");
+  assertIncludes(withTimeoutSource, 'export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {');
+
+  // The UI-level timeouts above are a second line of defense: restoration
+  // itself must also settle on its own, independent of whether app/index.tsx
+  // is watching, or a retry after the UI timeout fires would just return the
+  // same still-pending promise.
+  assertIncludes(restorationStore, 'export const RESTORATION_HARD_TIMEOUT_MS');
+  assertIncludes(restorationStore, 'withTimeout(restoreStartupAccountData(), RESTORATION_HARD_TIMEOUT_MS)');
+  assertIncludes(restorationStore, 'restorePromise = null;');
 });
 
 test('sign-out clears auth, restoration cache, chat, private session, and account artifacts', () => {
@@ -576,10 +588,12 @@ test('the completion-snapshot write is fire-and-forget: exiting an active sessio
 
 test('api client passes AbortController signal and captures safe request diagnostics', () => {
   assertIncludes(apiClient, 'type RequestOptions = RequestInit');
-  assertIncludes(apiClient, 'fetch(`${baseUrl}${path}`, { ...options, headers })');
+  assertIncludes(apiClient, 'fetchWithTimeout(`${baseUrl}${path}`, { ...options, headers })');
   assertIncludes(apiClient, 'X-Unfiltr-Request-Id');
   assertIncludes(apiClient, 'getLastApiDiagnostics');
   assertIncludes(apiClient, 'lastSafeErrorCode');
+  assertIncludes(fetchWithTimeoutSource, 'new AbortController()');
+  assertIncludes(fetchWithTimeoutSource, 'signal: controller.signal');
 });
 
 async function read(path) {

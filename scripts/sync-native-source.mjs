@@ -16,10 +16,20 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
 
-const REQUIRED_SOURCE_SHA = 'babbcf6ab55c297bd391a576e0f4c8733c7bc8b1';
+const REQUIRED_SOURCE_SHA = '276a1bc3c88babd835d4699e081c284e8e05c2e1';
 const COPY_PATHS = ['app', 'src', 'tests'];
 const OPTIONAL_COPY_PATHS = ['assets/brand', 'assets/meditation'];
-const ANDROID_OVERLAY_PATHS = ['src/platform/android'];
+// Directories that exist only in this repo (never present in the iOS
+// source), so a full snapshot/restore around the wholesale app+src copy is
+// safe. Files that exist in BOTH repos and need Android-specific edits
+// merged into the latest iOS content (app/index.tsx, ChatScreen.tsx,
+// JournalScreen.tsx, MeditationScreen.tsx) are NOT overlay-safe -- they
+// must be re-patched by hand after each sync. See docs/ANDROID_NATIVE_SYNC.md.
+const ANDROID_OVERLAY_PATHS = [
+  'src/platform/android',
+  'src/features/onboarding/googleSignIn',
+  'src/lib/navigation',
+];
 
 function parseArgs(argv) {
   const args = { source: null, apply: false };

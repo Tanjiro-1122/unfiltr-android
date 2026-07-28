@@ -1,4 +1,5 @@
 import { env } from '@/config';
+import { fetchWithTimeout } from '@/lib/api/fetchWithTimeout';
 import { getValidAccessToken, recoverBackendSession } from '@/lib/auth/session';
 import {
   loadVoicePersonalityPreferences,
@@ -181,7 +182,7 @@ async function sendRequest(
     headers.delete('Authorization');
   }
 
-  const response = await fetch(`${baseUrl}${path}`, { ...options, headers });
+  const response = await fetchWithTimeout(`${baseUrl}${path}`, { ...options, headers });
   const text = await response.text();
   const body = text ? parseJson(text) : null;
   if (!response.ok) {

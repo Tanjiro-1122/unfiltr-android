@@ -1,4 +1,6 @@
 import { env } from '@/config';
+import { FetchTimeoutError, fetchWithTimeout } from '@/lib/api/fetchWithTimeout';
+import { recordRestorationStage } from '@/lib/diagnostics/restorationDiagnostics';
 import { deleteSecureItem, getSecureItem, setSecureItem } from '@/lib/storage';
 
 type AppleSessionResponse = {
@@ -48,7 +50,7 @@ export async function exchangeAppleIdentityToken(
 ): Promise<BackendSession> {
   if (!env.apiBaseUrl) throw new Error('API base URL is not configured.');
 
-  const response = await fetch(`${env.apiBaseUrl}/api/auth/apple`, {
+  const response = await fetchWithTimeout(`${env.apiBaseUrl}/api/auth/apple`, {
     method: 'POST',
     headers: {
       Accept: 'application/json',
@@ -94,7 +96,7 @@ export async function exchangeGoogleIdentityToken(
 ): Promise<BackendSession> {
   if (!env.apiBaseUrl) throw new Error('API base URL is not configured.');
 
-  const response = await fetch(`${env.apiBaseUrl}/api/auth/google`, {
+  const response = await fetchWithTimeout(`${env.apiBaseUrl}/api/auth/google`, {
     method: 'POST',
     headers: {
       Accept: 'application/json',
@@ -172,13 +174,20 @@ export async function recoverBackendSession(): Promise<SessionRecoveryResult> {
     };
   }
 
+  recordRestorationStage('auth-recovery-start');
   if (!exchangePromise) {
     exchangePromise = (async () => {
       try {
-        return appleIdentityToken
+        const session = appleIdentityToken
           ? await exchangeAppleIdentityToken(appleIdentityToken)
           : await exchangeGoogleIdentityToken(googleIdentityToken!);
-      } catch {
+        recordRestorationStage('auth-recovery-success');
+        return session;
+      } catch (error) {
+        recordRestorationStage(
+          error instanceof FetchTimeoutError ? 'auth-recovery-timeout' : 'auth-recovery-failed',
+          error instanceof Error ? error.name : undefined,
+        );
         await clearBackendSession();
         return null;
       }

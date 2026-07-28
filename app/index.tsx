@@ -44,8 +44,10 @@ import {
   unavailableProfileDiagnostic,
   type ProfileDiagnosticResult,
 } from '@/lib/accountDiagnostic';
+import { TimeoutError, withTimeout } from '@/lib/async/withTimeout';
 import { clearAuthenticatedSession, clearRememberedAccountIdentity } from '@/lib/auth/session';
 import { restoreStartupAuthSession, type StartupAuthStatus } from '@/lib/auth/startup';
+import { recordRestorationStage } from '@/lib/diagnostics/restorationDiagnostics';
 import { useAndroidBackHandler } from '@/lib/navigation/useAndroidBackHandler';
 import { signOutRevenueCat } from '@/lib/purchases/revenueCat';
 import { hydrateLocalProfileFromRestoration } from '@/lib/restoration/hydrateLocalProfile';
@@ -97,22 +99,6 @@ type AppScreen =
 // indefinitely -- both must resolve to an explicit retry/error state.
 const ACCOUNT_LOOKUP_TIMEOUT_MS = 20000;
 const RESTORATION_WAIT_TIMEOUT_MS = 20000;
-
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Request timed out.')), ms);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        reject(error instanceof Error ? error : new Error(String(error)));
-      },
-    );
-  });
-}
 
 const initialOnboardingStatus: OnboardingStatus = {
   ageGateComplete: false,
@@ -521,11 +507,17 @@ export default function FoundationScreen() {
 
     async function resolveAccount() {
       setAccountResolution('pending');
+      recordRestorationStage('account-lookup-start');
 
       let diagnostic: ProfileDiagnosticResult;
       try {
         diagnostic = await withTimeout(runProfileDiagnostic(), ACCOUNT_LOOKUP_TIMEOUT_MS);
-      } catch {
+        recordRestorationStage('account-lookup-success', diagnostic.status);
+      } catch (error) {
+        recordRestorationStage(
+          error instanceof TimeoutError ? 'account-lookup-timeout' : 'account-lookup-failed',
+          error instanceof Error ? error.name : undefined,
+        );
         diagnostic = unavailableProfileDiagnostic();
       }
       if (cancelled) return;
@@ -585,6 +577,7 @@ export default function FoundationScreen() {
     if (restoration.status === 'ready') return undefined;
 
     const timer = setTimeout(() => {
+      recordRestorationStage('restoration-timeout', 'ui-level-backstop');
       setAccountResolution((current) => (current === 'returning' ? 'blocked' : current));
     }, RESTORATION_WAIT_TIMEOUT_MS);
 
