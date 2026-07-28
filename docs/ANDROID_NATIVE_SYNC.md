@@ -51,3 +51,7 @@ The conversion will therefore preserve Android release identity and services whi
 - Do not publish to Google Play until the critical native flows pass on a physical Android device.
 - Do not remove Android signing, Google services or Play submission configuration while synchronizing the native source.
 - Do not reuse the WebView wrapper as the final user interface.
+
+## Automation
+
+A push to `android/sync-ios-repair` triggers the guarded native-source synchronization workflow. The workflow may commit the synchronized native app only after typecheck, lint, unit tests, release tests, Expo Doctor, and Android export all pass.
