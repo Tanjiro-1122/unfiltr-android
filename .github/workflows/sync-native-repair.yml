@@ -26,6 +26,16 @@ jobs:
           ref: android/sync-ios-repair
           fetch-depth: 0
 
+      - name: Verify private-source token exists
+        env:
+          NATIVE_REPO_TOKEN: ${{ secrets.NATIVE_REPO_TOKEN }}
+        run: |
+          if [ -z "$NATIVE_REPO_TOKEN" ]; then
+            echo "Missing required repository secret: NATIVE_REPO_TOKEN"
+            echo "Create a fine-grained GitHub token with read-only Contents access to Tanjiro-1122/unfiltr-native, then save it in unfiltr-android as Actions secret NATIVE_REPO_TOKEN."
+            exit 1
+          fi
+
       - name: Check out repaired native source
         uses: actions/checkout@v4
         with:
@@ -33,6 +43,8 @@ jobs:
           ref: repair/post-build67-fixes
           path: native-source
           fetch-depth: 0
+          token: ${{ secrets.NATIVE_REPO_TOKEN }}
+          persist-credentials: false
 
       - name: Put source checkout on the expected branch
         working-directory: native-source
