@@ -6,6 +6,7 @@ import Purchases, {
 } from 'react-native-purchases';
 
 import { env } from '@/config';
+import { RevenueCatSdkKeyMissingError } from '@/lib/purchases/purchaseErrors';
 import { deleteSecureItem, getSecureItem, setSecureItem } from '@/lib/storage';
 import { deleteAppStorageItem, setAppStorageItem } from '@/lib/storage/appStorage';
 
@@ -29,7 +30,7 @@ export async function configureRevenueCat(): Promise<void> {
   if (Platform.OS === 'web') return;
 
   const apiKey = Platform.OS === 'ios' ? env.revenueCatAppleApiKey : env.revenueCatGoogleApiKey;
-  if (!apiKey) throw new Error(`RevenueCat ${Platform.OS} public SDK key is not configured.`);
+  if (!apiKey) throw new RevenueCatSdkKeyMissingError(Platform.OS);
 
   if (!configured) {
     Purchases.configure({ apiKey });
@@ -48,7 +49,7 @@ export async function syncRevenueCatUser(appUserId: string): Promise<CustomerInf
 
   if (!configured) {
     const apiKey = Platform.OS === 'ios' ? env.revenueCatAppleApiKey : env.revenueCatGoogleApiKey;
-    if (!apiKey) throw new Error(`RevenueCat ${Platform.OS} public SDK key is not configured.`);
+    if (!apiKey) throw new RevenueCatSdkKeyMissingError(Platform.OS);
     Purchases.configure({ apiKey });
     configured = true;
   }

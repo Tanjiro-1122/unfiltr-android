@@ -13,6 +13,7 @@ import type { PurchasesPackage } from 'react-native-purchases';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BackButton } from '@/components/BackButton';
+import { categorizeEmptyOfferings, describePurchaseError, describePurchaseErrorCategory } from '@/lib/purchases/purchaseErrors';
 import {
   getRevenueCatState,
   getRevenueCatTier,
@@ -65,6 +66,21 @@ export function PremiumScreen({ onBack, returnTo = 'settings' }: PremiumScreenPr
 
     try {
       const { customerInfo, offerings } = await getRevenueCatState();
+
+      // Detected and reported separately (not lumped into one empty-list
+      // case): no current offering at all vs. a current offering that
+      // exists but has zero packages -- distinct RevenueCat dashboard
+      // states, distinct messages.
+      const emptyCategory = categorizeEmptyOfferings(
+        Boolean(offerings.current),
+        offerings.current?.availablePackages.length ?? 0,
+      );
+      if (emptyCategory) {
+        setPlans([]);
+        setStatus(describePurchaseErrorCategory(emptyCategory));
+        return;
+      }
+
       const available = offerings.current?.availablePackages ?? [];
       const mapped = available
         .map(mapPlan)
@@ -81,10 +97,10 @@ export function PremiumScreen({ onBack, returnTo = 'settings' }: PremiumScreenPr
           ? `${formatTierName(tier)} is active.`
           : mapped.length
             ? 'Choose the plan that fits how much you want to talk.'
-            : 'No RevenueCat offering is currently available. Check the RevenueCat offering configuration.',
+            : describePurchaseErrorCategory('products-not-configured'),
       );
     } catch (error) {
-      setStatus(readPurchaseError(error, 'Could not connect to RevenueCat.'));
+      setStatus(describePurchaseError(error, 'Could not connect to RevenueCat.'));
     } finally {
       setLoading(false);
     }
@@ -109,7 +125,7 @@ export function PremiumScreen({ onBack, returnTo = 'settings' }: PremiumScreenPr
           : 'The purchase completed, but the premium entitlement was not returned. Check the RevenueCat entitlement mapping.',
       );
     } catch (error) {
-      setStatus(readPurchaseError(error, 'The purchase could not be completed.'));
+      setStatus(describePurchaseError(error, 'The purchase could not be completed.'));
     } finally {
       setWorking(false);
     }
@@ -129,7 +145,7 @@ export function PremiumScreen({ onBack, returnTo = 'settings' }: PremiumScreenPr
           : 'No active premium purchase was found for this App Store account.',
       );
     } catch (error) {
-      setStatus(readPurchaseError(error, 'Purchases could not be restored.'));
+      setStatus(describePurchaseError(error, 'Purchases could not be restored.'));
     } finally {
       setWorking(false);
     }
@@ -311,13 +327,6 @@ function describeTier(tier: RevenueCatTier): string {
     default:
       return '10 free messages per day.';
   }
-}
-
-function readPurchaseError(error: unknown, fallback: string): string {
-  if (!error || typeof error !== 'object') return fallback;
-  const candidate = error as { code?: string; message?: string; userCancelled?: boolean };
-  if (candidate.userCancelled || candidate.code === '1') return 'Purchase cancelled.';
-  return candidate.message?.trim() || fallback;
 }
 
 const styles = StyleSheet.create({
