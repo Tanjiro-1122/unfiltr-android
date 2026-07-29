@@ -7,7 +7,7 @@ export type ResolvingSnapshot = {
 };
 
 /**
- * True whenever the UI is (or would be) showing "Restoring your account",
+ * True whenever the UI is (or would be) showing "Loading your Unfiltr account.",
  * under the exact same two conditions app/index.tsx renders that screen.
  * Used both to render the screen and to decide whether the watchdog below
  * needs to intervene -- kept as its own pure function so it's one thing to

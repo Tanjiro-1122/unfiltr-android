@@ -100,6 +100,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
     borderRadius: 18,
     backgroundColor: '#8B5CF6',
   },
@@ -107,15 +109,21 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '900',
-    lineHeight: 21,
+    // Same fix as secondaryButtonText below: no fixed lineHeight, and
+    // paddingVertical + minHeight (not height) on the button so it can
+    // grow to fit at any device font scale instead of clipping.
+    textAlign: 'center',
   },
   secondaryButton: {
     width: '100%',
     maxWidth: 340,
     minHeight: 48,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.18)',
     borderRadius: 16,
@@ -124,7 +132,13 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.82)',
     fontSize: 15,
     fontWeight: '800',
-    lineHeight: 20,
+    // No fixed lineHeight: an explicit value here (previously 20, tight
+    // against fontSize 15) clips the second word once the device's font
+    // scale grows the rendered glyphs past that box -- "Sign Out" observed
+    // rendering as just "Sign" on a physical device. minHeight (not
+    // height) on the button plus paddingVertical lets the button grow to
+    // fit the text at any scale instead of clipping it.
+    textAlign: 'center',
   },
   disabledButton: {
     opacity: 0.72,

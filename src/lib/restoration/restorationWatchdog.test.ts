@@ -96,6 +96,18 @@ describe('scheduleRestorationWatchdog', () => {
     expect(onTimeout).not.toHaveBeenCalled();
   });
 
+  it('does not fire after restoration succeeds, even if it was already ready well before the deadline (the watchdog stays a pure fallback, not a trigger on the happy path)', async () => {
+    const onTimeout = vi.fn();
+    scheduleRestorationWatchdog({
+      durationMs: 30000,
+      getSnapshot: () => ({ accountResolution: 'returning', restorationStatus: 'ready' }),
+      onTimeout,
+    });
+
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(onTimeout).not.toHaveBeenCalled();
+  });
+
   it('does not fire before the deadline even if still resolving', async () => {
     const onTimeout = vi.fn();
     scheduleRestorationWatchdog({

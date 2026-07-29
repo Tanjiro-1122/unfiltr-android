@@ -26,6 +26,8 @@ const withTimeoutSource = await read('src/lib/async/withTimeout.ts');
 const fetchWithTimeoutSource = await read('src/lib/api/fetchWithTimeout.ts');
 const restorationWatchdogSource = await read('src/lib/restoration/restorationWatchdog.ts');
 const restorationDiagnosticsSource = await read('src/lib/diagnostics/restorationDiagnostics.ts');
+const accountResolutionOperation = await read('src/lib/restoration/accountResolutionOperation.ts');
+const operationGuard = await read('src/lib/async/operationGuard.ts');
 
 test('onboarding order stays Splash -> Age -> Consent -> Sign-In -> account resolution -> (new: Name -> questionnaire/manual avatar -> companion -> naming -> style) -> app', () => {
   assertOrder(appIndex, [
@@ -53,20 +55,62 @@ test('the backend account lookup only runs once auth has completed, before resto
   assertOrder(appIndex, [
     'const startupAuth = await restoreStartupAuthSession();',
     "authComplete: startupAuth.status === 'authenticated',",
-    'diagnostic = await withTimeout(runProfileDiagnostic(), ACCOUNT_LOOKUP_TIMEOUT_MS);',
+    "if (!onboardingStatus.authComplete) return undefined;",
+    'runDiagnostic: () => withTimeout(runProfileDiagnostic(), ACCOUNT_LOOKUP_TIMEOUT_MS),',
+    'startRestoration: () => void refreshRestoration(),',
+  ]);
+  // The diagnostic -> classify -> refreshRestoration ordering itself now
+  // lives in accountResolutionOperation.ts (extracted so it can be unit
+  // tested directly -- see accountResolutionOperation.test.ts), not inline
+  // in app/index.tsx's effect.
+  assertOrder(accountResolutionOperation, [
+    'diagnostic = await deps.runDiagnostic();',
     "if (decision === 'allow') {",
-    'void refreshRestoration();',
+    'deps.onReturning();',
+    'deps.startRestoration();',
   ]);
 });
 
-test('a genuinely new account (not_found) is never routed to the restore-error screen', () => {
+test('the account-lookup effect uses a stable operation guard, not a per-invocation cancelled flag tied to accountResolution', () => {
+  // The exact former bug: a `let cancelled = false` closure combined with
+  // `accountResolution` in this same effect's dependency array, where the
+  // operation's own first action (setAccountResolution('pending')) wrote
+  // to that dependency -- causing React to run the OLD invocation's
+  // cleanup (cancelled = true) within milliseconds, well before the real
+  // network round-trip to profile-diagnostic ever resolved. Every
+  // resolution attempt cancelled itself immediately, silently skipping
+  // classification and restoration.
+  assert.doesNotMatch(appIndex, /let cancelled = false/);
+  assertIncludes(appIndex, 'const resolveAccountOperationGuardRef = useRef(createOperationGuard());');
+  assertIncludes(appIndex, 'resolveAccountOperationGuardRef.current.begin()');
+  assertIncludes(appIndex, 'isStale: () => resolveAccountOperationGuardRef.current.isStale(operationId)');
+  // Only a genuine unmount invalidates the guard from outside the
+  // resolution effect itself -- confirmed via its own dedicated effect
+  // with an empty dependency array.
   assertOrder(appIndex, [
-    "const decision = classifyProfileDiagnostic(diagnostic);",
+    'const guard = resolveAccountOperationGuardRef.current;',
+    'return () => {',
+    'guard.invalidate();',
+    '};',
+    '}, []);',
+  ]);
+  assertIncludes(operationGuard, 'isStale(operationId: number): boolean {');
+  assertIncludes(operationGuard, 'return current !== operationId;');
+});
+
+test('the account-resolving progress message reads "Loading your Unfiltr account."', () => {
+  assertIncludes(appIndex, 'Loading your Unfiltr account.');
+  assert.doesNotMatch(appIndex, /Restoring your account/);
+});
+
+test('a genuinely new account (not_found) is never routed to the restore-error screen', () => {
+  assertOrder(accountResolutionOperation, [
+    'const decision = classify(diagnostic);',
     "if (decision === 'allow') {",
     "} else if (decision === 'not_found') {",
-    "setAccountResolution('new');",
+    'deps.onNew();',
     '} else {',
-    "setAccountResolution('blocked');",
+    'deps.onBlocked();',
   ]);
 });
 
@@ -110,7 +154,10 @@ test('a genuinely new (not_found) account never triggers hydration from a previo
   const newAccountBody = appIndex.slice(newAccountStart, newAccountEnd);
 
   assert.doesNotMatch(newAccountBody, /hydrateLocalProfileFromRestoration/);
-  assertIncludes(appIndex, "} else if (decision === 'not_found') {\n          setAccountResolution('new');");
+  assertIncludes(
+    accountResolutionOperation,
+    "} else if (decision === 'not_found') {\n      deps.onNew();",
+  );
 });
 
 test('signing out fully unscopes the device from the previous Apple account before a new one can hydrate', () => {
@@ -166,7 +213,8 @@ test('restoration failure or an indefinite hang is never silently shown as Main 
   assertIncludes(appIndex, "setAccountResolution('blocked');");
   assertIncludes(appIndex, 'RESTORATION_WAIT_TIMEOUT_MS');
   assertIncludes(appIndex, 'ACCOUNT_LOOKUP_TIMEOUT_MS');
-  assertIncludes(appIndex, "import { TimeoutError, withTimeout } from '@/lib/async/withTimeout';");
+  assertIncludes(appIndex, "import { withTimeout } from '@/lib/async/withTimeout';");
+  assertIncludes(accountResolutionOperation, "import { TimeoutError } from '@/lib/async/withTimeout';");
   assertIncludes(withTimeoutSource, 'export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {');
 
   // The UI-level timeouts above are a second line of defense: restoration

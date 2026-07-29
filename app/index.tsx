@@ -38,18 +38,15 @@ import {
 import { SplashScreen } from '@/features/onboarding/splash';
 import { PremiumScreen } from '@/features/premium';
 import { SettingsScreen } from '@/features/settings';
-import {
-  classifyProfileDiagnostic,
-  runProfileDiagnostic,
-  unavailableProfileDiagnostic,
-  type ProfileDiagnosticResult,
-} from '@/lib/accountDiagnostic';
-import { TimeoutError, withTimeout } from '@/lib/async/withTimeout';
+import { runProfileDiagnostic } from '@/lib/accountDiagnostic';
+import { createOperationGuard } from '@/lib/async/operationGuard';
+import { withTimeout } from '@/lib/async/withTimeout';
 import { clearAuthenticatedSession, clearRememberedAccountIdentity } from '@/lib/auth/session';
 import { restoreStartupAuthSession, type StartupAuthStatus } from '@/lib/auth/startup';
 import { recordRestorationStage } from '@/lib/diagnostics/restorationDiagnostics';
 import { useAndroidBackHandler } from '@/lib/navigation/useAndroidBackHandler';
 import { signOutRevenueCat } from '@/lib/purchases/revenueCat';
+import { runAccountResolutionOperation } from '@/lib/restoration/accountResolutionOperation';
 import { hydrateLocalProfileFromRestoration } from '@/lib/restoration/hydrateLocalProfile';
 import {
   clearRestorationForSignOut,
@@ -103,7 +100,7 @@ const RESTORATION_WAIT_TIMEOUT_MS = 20000;
 // Absolute backstop, independent of the two timeouts above: it does not
 // await, wrap, or race any of their promises, so a bug in either one (or a
 // hang somewhere neither one covers -- a SecureStore read, for instance)
-// still cannot leave "Restoring your account" on screen forever.
+// still cannot leave "Loading your Unfiltr account." on screen forever.
 const OUTER_RESTORATION_WATCHDOG_MS = 30000;
 
 const initialOnboardingStatus: OnboardingStatus = {
@@ -230,7 +227,7 @@ function AccountResolvingView() {
   return (
     <View style={styles.resolvingRoot}>
       <ActivityIndicator color="#C084FC" size="large" />
-      <Text style={styles.resolvingText}>Restoring your account...</Text>
+      <Text style={styles.resolvingText}>Loading your Unfiltr account.</Text>
     </View>
   );
 }
@@ -438,6 +435,10 @@ export default function FoundationScreen() {
   const [statusLoaded, setStatusLoaded] = useState(bypassSplash);
   const handledResponseId = useRef<string | null>(null);
   const hydratedAccountIdRef = useRef<string | null>(null);
+  // Stable across re-renders and never touched by the resolution
+  // operation's own state writes -- see the account-lookup effect below
+  // for why that decoupling is exactly what fixes the self-cancelling bug.
+  const resolveAccountOperationGuardRef = useRef(createOperationGuard());
   const restoration = useRestoration();
 
   // Read at watchdog fire time (below), not effect-registration time, so a
@@ -514,60 +515,64 @@ export default function FoundationScreen() {
     };
   }, [bypassSplash]);
 
+  // A genuine unmount is the only thing allowed to invalidate an in-flight
+  // resolution operation from OUTSIDE the effect below. Deliberately
+  // separate from that effect's own re-runs: see resolveAccountOperationGuardRef.
+  useEffect(() => {
+    const guard = resolveAccountOperationGuardRef.current;
+    return () => {
+      guard.invalidate();
+    };
+  }, []);
+
   // The single backend account lookup: runs exactly once per completed auth,
   // and decides new vs. returning vs. blocked. Never falls through to a menu
   // on its own -- callers gate on `accountResolution`.
+  //
+  // Bug this fixes: the previous version used a per-invocation `cancelled`
+  // flag set by this effect's own cleanup, with `accountResolution` in the
+  // dependency array below. Since the async operation's very first action
+  // was `setAccountResolution('pending')` -- a write to that same
+  // dependency -- React saw the dependency change and ran the OLD
+  // invocation's cleanup (cancelled = true) within milliseconds, well
+  // before the real network round-trip to profile-diagnostic ever
+  // resolved. Every attempt therefore cancelled itself immediately after
+  // starting, silently skipping classification and restoration and leaving
+  // accountResolution stuck at 'pending' until the 30s outer watchdog
+  // forced it to 'blocked' -- exactly the failure confirmed on-device.
+  //
+  // The fix: staleness is now tracked by resolveAccountOperationGuardRef, a
+  // stable ref this effect's own state writes never touch. Only a
+  // genuinely NEW attempt (this effect re-running with accountResolution
+  // back at null -- Retry, or a fresh sign-in after sign-out) or a real
+  // unmount (above) can make an operation stale.
   useEffect(() => {
     if (!statusLoaded) return undefined;
     if (!onboardingStatus.authComplete) return undefined;
     if (accountResolution !== null) return undefined;
 
-    let cancelled = false;
+    const operationId = resolveAccountOperationGuardRef.current.begin();
 
-    async function resolveAccount() {
-      setAccountResolution('pending');
-      setResolveAttempt((attempt) => attempt + 1);
-      recordRestorationStage('account-lookup-start');
+    void runAccountResolutionOperation({
+      isStale: () => resolveAccountOperationGuardRef.current.isStale(operationId),
+      onBlocked: () => setAccountResolution('blocked'),
+      onNew: () => setAccountResolution('new'),
+      onPending: () => {
+        setAccountResolution('pending');
+        // Bumped once per attempt (the initial one and every Retry) so the
+        // outer watchdog below re-arms per attempt instead of only ever
+        // covering the first one. Called from inside the async operation
+        // (not directly in this effect body) so it isn't a synchronous
+        // setState-in-effect.
+        setResolveAttempt((attempt) => attempt + 1);
+      },
+      onReturning: () => setAccountResolution('returning'),
+      onSettled: () => setIsRestoreRetrying(false),
+      runDiagnostic: () => withTimeout(runProfileDiagnostic(), ACCOUNT_LOOKUP_TIMEOUT_MS),
+      startRestoration: () => void refreshRestoration(),
+    });
 
-      try {
-        let diagnostic: ProfileDiagnosticResult;
-        try {
-          diagnostic = await withTimeout(runProfileDiagnostic(), ACCOUNT_LOOKUP_TIMEOUT_MS);
-          recordRestorationStage('account-lookup-success', diagnostic.status);
-        } catch (error) {
-          recordRestorationStage(
-            error instanceof TimeoutError ? 'account-lookup-timeout' : 'account-lookup-failed',
-            error instanceof Error ? error.name : undefined,
-          );
-          diagnostic = unavailableProfileDiagnostic();
-        }
-        if (cancelled) return;
-
-        const decision = classifyProfileDiagnostic(diagnostic);
-        if (decision === 'allow') {
-          setAccountResolution('returning');
-          void refreshRestoration();
-        } else if (decision === 'not_found') {
-          setAccountResolution('new');
-        } else {
-          setAccountResolution('blocked');
-        }
-      } catch (error) {
-        // classifyProfileDiagnostic (or anything else here) throwing
-        // unexpectedly must still resolve to an explicit error state, not
-        // leave accountResolution stuck at 'pending' with nothing watching it.
-        recordRestorationStage('account-lookup-failed', error instanceof Error ? error.name : undefined);
-        if (!cancelled) setAccountResolution('blocked');
-      } finally {
-        if (!cancelled) setIsRestoreRetrying(false);
-      }
-    }
-
-    void resolveAccount();
-
-    return () => {
-      cancelled = true;
-    };
+    return undefined;
   }, [accountResolution, onboardingStatus.authComplete, statusLoaded]);
 
   // Once restoration finishes for a returning account, hydrate the legacy
