@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { env } from '@/config';
 import { exchangeGoogleIdentityToken, GoogleSessionExchangeError } from '@/lib/auth/session';
+import { recordRestorationStage } from '@/lib/diagnostics/restorationDiagnostics';
 import { setSecureItem } from '@/lib/storage';
 import {
   AndroidGoogleAuthError,
@@ -91,6 +92,7 @@ export function GoogleSignInScreen({ initialError, onAuthenticated }: GoogleSign
 
     setIsSigningIn(true);
     setError(null);
+    recordRestorationStage('auth-started');
 
     try {
       const account = await signInWithGoogleAndroid();
@@ -98,6 +100,7 @@ export function GoogleSignInScreen({ initialError, onAuthenticated }: GoogleSign
         setError('Google did not return an identity token. Please try signing in again.');
         return;
       }
+      recordRestorationStage('provider-token-received');
 
       let session;
       try {

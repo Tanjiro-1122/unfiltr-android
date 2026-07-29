@@ -1,4 +1,18 @@
 export type RestorationStage =
+  // Sign-in-screen stages: cover the part of the flow that happens BEFORE
+  // any backend call (native provider SDK interaction), which none of the
+  // stages below ever observed.
+  | 'auth-started'
+  | 'provider-token-received'
+  // Backend identity-exchange stages: recorded inside session.ts's
+  // exchange functions, so they cover both a fresh sign-in AND the
+  // auth-recovery path below (which also calls those same functions).
+  | 'backend-exchange-started'
+  | 'backend-exchange-succeeded'
+  | 'backend-exchange-failed'
+  | 'identity-found'
+  | 'identity-not-found'
+  | 'new-user-created'
   | 'auth-recovery-start'
   | 'auth-recovery-success'
   | 'auth-recovery-timeout'

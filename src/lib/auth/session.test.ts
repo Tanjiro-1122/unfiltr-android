@@ -151,6 +151,45 @@ describe('exchangeGoogleIdentityToken', () => {
     expect(secureStore.get('auth.appleUserId')).toBe('g_user_1');
   });
 
+  it('threads the status field through, and records identity-found/identity-not-found/new-user-created accordingly', async () => {
+    const { exchangeGoogleIdentityToken } = await import('./session');
+    const { clearRestorationDiagnostics, getRestorationDiagnostics } = await import(
+      '@/lib/diagnostics/restorationDiagnostics'
+    );
+    const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+
+    clearRestorationDiagnostics();
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ accessToken: 'tok', googleUserId: 'new-user-1', expiresAt, status: 'new_user' }),
+        { status: 200 },
+      ),
+    ) as unknown as typeof fetch;
+    const newUserSession = await exchangeGoogleIdentityToken('id-token');
+    expect(newUserSession.status).toBe('new_user');
+    const newUserStages = getRestorationDiagnostics().map((entry) => entry.stage);
+    expect(newUserStages).toContain('identity-not-found');
+    expect(newUserStages).toContain('new-user-created');
+
+    clearRestorationDiagnostics();
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          accessToken: 'tok',
+          googleUserId: 'returning-user-1',
+          expiresAt,
+          status: 'existing_user_restored',
+        }),
+        { status: 200 },
+      ),
+    ) as unknown as typeof fetch;
+    const returningSession = await exchangeGoogleIdentityToken('id-token');
+    expect(returningSession.status).toBe('existing_user_restored');
+    const returningStages = getRestorationDiagnostics().map((entry) => entry.stage);
+    expect(returningStages).toContain('identity-found');
+    expect(returningStages).not.toContain('new-user-created');
+  });
+
   it('an existing account (same googleUserId as a previous sign-in) resolves to the same identity keys', async () => {
     const { exchangeGoogleIdentityToken } = await import('./session');
     const expiresAt = Math.floor(Date.now() / 1000) + 3600;

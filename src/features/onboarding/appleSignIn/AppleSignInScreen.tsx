@@ -14,6 +14,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { exchangeAppleIdentityToken } from '@/lib/auth/session';
+import { recordRestorationStage } from '@/lib/diagnostics/restorationDiagnostics';
 import { setSecureItem } from '@/lib/storage';
 
 type AppleSignInScreenProps = {
@@ -81,6 +82,7 @@ export function AppleSignInScreen({ initialError, onAuthenticated }: AppleSignIn
 
     setIsSigningIn(true);
     setError(null);
+    recordRestorationStage('auth-started');
 
     try {
       if (Platform.OS === 'web') {
@@ -107,10 +109,14 @@ export function AppleSignInScreen({ initialError, onAuthenticated }: AppleSignIn
         setError('Apple did not return an identity token. Please try signing in again.');
         return;
       }
+      recordRestorationStage('provider-token-received');
 
       let session;
       try {
-        session = await exchangeAppleIdentityToken(credential.identityToken, { persist: false });
+        session = await exchangeAppleIdentityToken(credential.identityToken, {
+          persist: false,
+          fullName: displayName || null,
+        });
       } catch {
         setError(
           'Could not verify your Apple sign-in with Unfiltr. Check your connection and try again.',

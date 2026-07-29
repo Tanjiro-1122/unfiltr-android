@@ -3,16 +3,20 @@ import { FetchTimeoutError, fetchWithTimeout } from '@/lib/api/fetchWithTimeout'
 import { recordRestorationStage } from '@/lib/diagnostics/restorationDiagnostics';
 import { deleteSecureItem, getSecureItem, setSecureItem } from '@/lib/storage';
 
+type IdentityStatus = 'new_user' | 'existing_user_restored';
+
 type AppleSessionResponse = {
   accessToken: string;
   appleUserId: string;
   expiresAt?: number;
+  status?: IdentityStatus;
 };
 
 type GoogleSessionResponse = {
   accessToken: string;
   googleUserId: string;
   expiresAt?: number;
+  status?: IdentityStatus;
 };
 
 type GoogleSessionErrorResponse = {
@@ -38,7 +42,21 @@ export type BackendSession = {
   accessToken: string;
   appleUserId: string;
   expiresAt: number;
+  status: IdentityStatus | undefined;
 };
+
+// Shared by both exchange functions below: records the outcome once the
+// backend has actually responded, so the caller doesn't have to duplicate
+// this at every call site (fresh sign-in AND the auth-recovery path both
+// go through here).
+function recordIdentityOutcome(status: IdentityStatus | undefined): void {
+  if (status === 'existing_user_restored') {
+    recordRestorationStage('identity-found');
+  } else if (status === 'new_user') {
+    recordRestorationStage('identity-not-found');
+    recordRestorationStage('new-user-created');
+  }
+}
 
 export type SessionRecoveryResult =
   | {
@@ -61,27 +79,36 @@ let exchangePromise: Promise<BackendSession | null> | null = null;
 
 type ExchangeAppleIdentityTokenOptions = {
   persist?: boolean;
+  // Apple only ever discloses the person's name via the native credential
+  // object, and only on the very first authorization -- the identity token
+  // itself never carries it. Passed through here so the backend can store
+  // it on first sign-in; omitted on every later sign-in for the same account.
+  fullName?: string | null;
 };
 
 export async function exchangeAppleIdentityToken(
   identityToken: string,
-  { persist = true }: ExchangeAppleIdentityTokenOptions = {},
+  { persist = true, fullName = null }: ExchangeAppleIdentityTokenOptions = {},
 ): Promise<BackendSession> {
   if (!env.apiBaseUrl) throw new Error('API base URL is not configured.');
 
+  recordRestorationStage('backend-exchange-started');
   const response = await fetchWithTimeout(`${env.apiBaseUrl}/api/auth/apple`, {
     method: 'POST',
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ identityToken }),
+    body: JSON.stringify({ identityToken, fullName: fullName || undefined }),
   });
 
   const body = (await response.json().catch(() => null)) as AppleSessionResponse | null;
   if (!response.ok || !body?.accessToken) {
+    recordRestorationStage('backend-exchange-failed');
     throw new Error('Apple session exchange failed.');
   }
+  recordRestorationStage('backend-exchange-succeeded');
+  recordIdentityOutcome(body.status);
 
   const expiresAt = normalizeExpiry(body.expiresAt, body.accessToken);
 
@@ -98,6 +125,7 @@ export async function exchangeAppleIdentityToken(
     accessToken: body.accessToken,
     appleUserId: body.appleUserId,
     expiresAt,
+    status: body.status,
   };
 }
 
@@ -115,6 +143,7 @@ export async function exchangeGoogleIdentityToken(
 ): Promise<BackendSession> {
   if (!env.apiBaseUrl) throw new Error('API base URL is not configured.');
 
+  recordRestorationStage('backend-exchange-started');
   const response = await fetchWithTimeout(`${env.apiBaseUrl}/api/auth/google`, {
     method: 'POST',
     headers: {
@@ -125,6 +154,7 @@ export async function exchangeGoogleIdentityToken(
   });
 
   if (!response.ok) {
+    recordRestorationStage('backend-exchange-failed');
     const errorBody = (await response.json().catch(() => null)) as GoogleSessionErrorResponse | null;
     throw new GoogleSessionExchangeError(
       errorBody?.code || 'UNKNOWN_ERROR',
@@ -134,8 +164,11 @@ export async function exchangeGoogleIdentityToken(
 
   const body = (await response.json().catch(() => null)) as GoogleSessionResponse | null;
   if (!body?.accessToken) {
+    recordRestorationStage('backend-exchange-failed');
     throw new GoogleSessionExchangeError('MALFORMED_RESPONSE', 'Google session exchange failed.');
   }
+  recordRestorationStage('backend-exchange-succeeded');
+  recordIdentityOutcome(body.status);
 
   const expiresAt = normalizeExpiry(body.expiresAt, body.accessToken);
 
@@ -152,6 +185,7 @@ export async function exchangeGoogleIdentityToken(
     accessToken: body.accessToken,
     appleUserId: body.googleUserId,
     expiresAt,
+    status: body.status,
   };
 }
 
