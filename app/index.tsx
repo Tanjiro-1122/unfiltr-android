@@ -56,6 +56,7 @@ import {
   refreshRestoration,
   useRestoration,
 } from '@/lib/restoration/restorationStore';
+import { scheduleRestorationWatchdog } from '@/lib/restoration/restorationWatchdog';
 import { deleteSecureItem, getSecureItem } from '@/lib/storage';
 import { deleteAppStorageItem } from '@/lib/storage/appStorage';
 import { signOutGoogleAndroid } from '@/platform/android/googleAuth';
@@ -99,6 +100,11 @@ type AppScreen =
 // indefinitely -- both must resolve to an explicit retry/error state.
 const ACCOUNT_LOOKUP_TIMEOUT_MS = 20000;
 const RESTORATION_WAIT_TIMEOUT_MS = 20000;
+// Absolute backstop, independent of the two timeouts above: it does not
+// await, wrap, or race any of their promises, so a bug in either one (or a
+// hang somewhere neither one covers -- a SecureStore read, for instance)
+// still cannot leave "Restoring your account" on screen forever.
+const OUTER_RESTORATION_WATCHDOG_MS = 30000;
 
 const initialOnboardingStatus: OnboardingStatus = {
   ageGateComplete: false,
@@ -416,6 +422,10 @@ export default function FoundationScreen() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [startupAuthStatus, setStartupAuthStatus] = useState<StartupAuthStatus>('unauthenticated');
   const [isRestoreRetrying, setIsRestoreRetrying] = useState(false);
+  // Bumped at the start of every resolveAccount() attempt (the initial one
+  // and every Retry), so the outer watchdog below re-arms per attempt
+  // instead of only ever covering the first one.
+  const [resolveAttempt, setResolveAttempt] = useState(0);
   const [settingsReturnTo, setSettingsReturnTo] = useState<AppScreen>('home');
   const [premiumReturnTo, setPremiumReturnTo] = useState<AppScreen>('home');
   const initialCapture = activeCaptureScreen ? captureStatus(activeCaptureScreen) : null;
@@ -429,6 +439,15 @@ export default function FoundationScreen() {
   const handledResponseId = useRef<string | null>(null);
   const hydratedAccountIdRef = useRef<string | null>(null);
   const restoration = useRestoration();
+
+  // Read at watchdog fire time (below), not effect-registration time, so a
+  // genuinely completed resolution is correctly observed as a no-op.
+  const accountResolutionRef = useRef(accountResolution);
+  const restorationStatusRef = useRef(restoration.status);
+  useEffect(() => {
+    accountResolutionRef.current = accountResolution;
+    restorationStatusRef.current = restoration.status;
+  }, [accountResolution, restoration.status]);
 
   // Chat, Journal, and Meditation own their in-screen back stacks (options
   // sheet / world picker / active session) and register their own Android
@@ -507,31 +526,41 @@ export default function FoundationScreen() {
 
     async function resolveAccount() {
       setAccountResolution('pending');
+      setResolveAttempt((attempt) => attempt + 1);
       recordRestorationStage('account-lookup-start');
 
-      let diagnostic: ProfileDiagnosticResult;
       try {
-        diagnostic = await withTimeout(runProfileDiagnostic(), ACCOUNT_LOOKUP_TIMEOUT_MS);
-        recordRestorationStage('account-lookup-success', diagnostic.status);
-      } catch (error) {
-        recordRestorationStage(
-          error instanceof TimeoutError ? 'account-lookup-timeout' : 'account-lookup-failed',
-          error instanceof Error ? error.name : undefined,
-        );
-        diagnostic = unavailableProfileDiagnostic();
-      }
-      if (cancelled) return;
+        let diagnostic: ProfileDiagnosticResult;
+        try {
+          diagnostic = await withTimeout(runProfileDiagnostic(), ACCOUNT_LOOKUP_TIMEOUT_MS);
+          recordRestorationStage('account-lookup-success', diagnostic.status);
+        } catch (error) {
+          recordRestorationStage(
+            error instanceof TimeoutError ? 'account-lookup-timeout' : 'account-lookup-failed',
+            error instanceof Error ? error.name : undefined,
+          );
+          diagnostic = unavailableProfileDiagnostic();
+        }
+        if (cancelled) return;
 
-      const decision = classifyProfileDiagnostic(diagnostic);
-      if (decision === 'allow') {
-        setAccountResolution('returning');
-        void refreshRestoration();
-      } else if (decision === 'not_found') {
-        setAccountResolution('new');
-      } else {
-        setAccountResolution('blocked');
+        const decision = classifyProfileDiagnostic(diagnostic);
+        if (decision === 'allow') {
+          setAccountResolution('returning');
+          void refreshRestoration();
+        } else if (decision === 'not_found') {
+          setAccountResolution('new');
+        } else {
+          setAccountResolution('blocked');
+        }
+      } catch (error) {
+        // classifyProfileDiagnostic (or anything else here) throwing
+        // unexpectedly must still resolve to an explicit error state, not
+        // leave accountResolution stuck at 'pending' with nothing watching it.
+        recordRestorationStage('account-lookup-failed', error instanceof Error ? error.name : undefined);
+        if (!cancelled) setAccountResolution('blocked');
+      } finally {
+        if (!cancelled) setIsRestoreRetrying(false);
       }
-      setIsRestoreRetrying(false);
     }
 
     void resolveAccount();
@@ -583,6 +612,31 @@ export default function FoundationScreen() {
 
     return () => clearTimeout(timer);
   }, [accountResolution, restoration.status]);
+
+  // The single outer watchdog for the whole post-auth resolve+restore
+  // operation (see restorationWatchdog.ts). Re-arms on every resolveAccount()
+  // attempt (the initial one and every Retry via resolveAttempt), and does
+  // not depend on accountResolution/restoration.status ever changing
+  // correctly -- it reads them fresh, via ref, only at fire time. This is
+  // what protects against a hang in a place none of the finer-grained
+  // timeouts above cover (e.g. a SecureStore read that never settles), not
+  // just a bug in one of them.
+  useEffect(() => {
+    if (!onboardingStatus.authComplete) return undefined;
+
+    return scheduleRestorationWatchdog({
+      durationMs: OUTER_RESTORATION_WATCHDOG_MS,
+      getSnapshot: () => ({
+        accountResolution: accountResolutionRef.current,
+        restorationStatus: restorationStatusRef.current,
+      }),
+      onTimeout: () => {
+        recordRestorationStage('restoration-timeout', 'outer-watchdog');
+        setIsRestoreRetrying(false);
+        setAccountResolution('blocked');
+      },
+    });
+  }, [onboardingStatus.authComplete, resolveAttempt]);
 
   function retryAccountRestore() {
     if (isRestoreRetrying) return;

@@ -27,18 +27,27 @@ const MAX_DETAIL_LENGTH = 120;
 
 let entries: RestorationDiagnosticEntry[] = [];
 
+const LOG_TAG = '[UnfiltrRestoration]';
+
 /**
  * `detail` must never be a token, secret, or raw error/response object --
  * callers pass a short, human-safe label only (e.g. a stage outcome or a
- * generic error class name). This is a small in-memory ring buffer, not
- * persisted, and is cleared on sign-out along with everything else
- * account-scoped.
+ * generic error class name). The in-memory ring buffer is cleared on
+ * sign-out along with everything else account-scoped; the console.warn
+ * below is not persisted at all, but unlike the ring buffer it is visible
+ * in `adb logcat` (filter for LOG_TAG) in a *release* build, since
+ * console.* is not stripped by this project's Babel/Metro config -- the
+ * ring buffer alone was reachable only from the in-app diagnostics screen,
+ * which is unreachable if the account-restoration screen itself is the one
+ * stuck.
  */
 export function recordRestorationStage(stage: RestorationStage, detail?: string): void {
   entries = [
     ...entries,
     { stage, timestamp: Date.now(), ...(detail ? { detail: detail.slice(0, MAX_DETAIL_LENGTH) } : {}) },
   ].slice(-MAX_ENTRIES);
+
+  console.warn(`${LOG_TAG} ${stage}${detail ? ` (${detail})` : ''}`);
 }
 
 export function getRestorationDiagnostics(): RestorationDiagnosticEntry[] {

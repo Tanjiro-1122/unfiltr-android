@@ -24,6 +24,8 @@ const sessionLifecycle = await read('src/lib/meditation/sessionLifecycle.ts');
 const restorationStore = await read('src/lib/restoration/restorationStore.ts');
 const withTimeoutSource = await read('src/lib/async/withTimeout.ts');
 const fetchWithTimeoutSource = await read('src/lib/api/fetchWithTimeout.ts');
+const restorationWatchdogSource = await read('src/lib/restoration/restorationWatchdog.ts');
+const restorationDiagnosticsSource = await read('src/lib/diagnostics/restorationDiagnostics.ts');
 
 test('onboarding order stays Splash -> Age -> Consent -> Sign-In -> account resolution -> (new: Name -> questionnaire/manual avatar -> companion -> naming -> style) -> app', () => {
   assertOrder(appIndex, [
@@ -108,7 +110,7 @@ test('a genuinely new (not_found) account never triggers hydration from a previo
   const newAccountBody = appIndex.slice(newAccountStart, newAccountEnd);
 
   assert.doesNotMatch(newAccountBody, /hydrateLocalProfileFromRestoration/);
-  assertIncludes(appIndex, "} else if (decision === 'not_found') {\n        setAccountResolution('new');");
+  assertIncludes(appIndex, "} else if (decision === 'not_found') {\n          setAccountResolution('new');");
 });
 
 test('signing out fully unscopes the device from the previous Apple account before a new one can hydrate', () => {
@@ -174,6 +176,28 @@ test('restoration failure or an indefinite hang is never silently shown as Main 
   assertIncludes(restorationStore, 'export const RESTORATION_HARD_TIMEOUT_MS');
   assertIncludes(restorationStore, 'withTimeout(restoreStartupAccountData(), RESTORATION_HARD_TIMEOUT_MS)');
   assertIncludes(restorationStore, 'restorePromise = null;');
+
+  // The single outer watchdog is the third, independent line of defense: it
+  // does not await, wrap, or race any of the promises the timeouts above
+  // protect, so a bug in either of them (or a hang somewhere neither one
+  // covers) still cannot leave the resolving screen up forever. It re-arms
+  // on every resolveAccount() attempt, including Retry, not just the first.
+  assertIncludes(appIndex, "import { scheduleRestorationWatchdog } from '@/lib/restoration/restorationWatchdog';");
+  assertIncludes(appIndex, 'const OUTER_RESTORATION_WATCHDOG_MS');
+  assertIncludes(appIndex, 'setResolveAttempt((attempt) => attempt + 1);');
+  assertIncludes(appIndex, '}, [onboardingStatus.authComplete, resolveAttempt]);');
+  assertIncludes(
+    restorationWatchdogSource,
+    'export function isStillResolving(snapshot: ResolvingSnapshot): boolean {',
+  );
+  assertIncludes(
+    restorationWatchdogSource,
+    'export function scheduleRestorationWatchdog(options: {',
+  );
+
+  // Diagnostics must survive a release build -- an in-memory-only ring
+  // buffer is unreachable if the screen it would explain is the one stuck.
+  assertIncludes(restorationDiagnosticsSource, 'console.warn(');
 });
 
 test('sign-out clears auth, restoration cache, chat, private session, and account artifacts', () => {

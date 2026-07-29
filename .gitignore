@@ -11,3 +11,7 @@ web-build/
 .env
 google-play-service-account.json
 yarn.lock
+
+credentials.json
+credentials/
+.idea/
