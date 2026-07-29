@@ -137,7 +137,19 @@ export function GoogleSignInScreen({ initialError, onAuthenticated }: GoogleSign
         return;
       }
 
-      setError('Google Sign In failed. Please try again.');
+      // Previously silent (see the handoff's Section 4 finding): logs the
+      // native SDK error via the same safe, release-visible mechanism used
+      // elsewhere in this file -- a bucketed enum code only (cancelled/
+      // in_progress/play_services_unavailable/unknown), never cause.message
+      // or the raw native error object, which could in principle echo back
+      // account data from the SDK. A DEVELOPER_ERROR-class code here (not
+      // distinguishable from 'unknown' at this level, but worth checking
+      // first) usually means the Android OAuth client's SHA-1/package name
+      // is misconfigured in Google Cloud Console for whatever keystore
+      // signed this build.
+      const bucketedCode = cause instanceof AndroidGoogleAuthError ? cause.code : 'unknown';
+      recordRestorationStage('auth-failed', bucketedCode);
+      setError(`Google Sign In failed. Please try again. (${bucketedCode})`);
     } finally {
       setIsSigningIn(false);
     }

@@ -4,6 +4,10 @@ export type RestorationStage =
   // stages below ever observed.
   | 'auth-started'
   | 'provider-token-received'
+  // The native provider SDK step itself failed (not cancelled, not a known
+  // Play Services issue) before any backend exchange was even attempted --
+  // distinct from backend-exchange-failed below, which is a step later.
+  | 'auth-failed'
   // Backend identity-exchange stages: recorded inside session.ts's
   // exchange functions, so they cover both a fresh sign-in AND the
   // auth-recovery path below (which also calls those same functions).
