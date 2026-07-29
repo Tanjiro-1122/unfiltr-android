@@ -17,8 +17,17 @@ import { recordRestorationStage } from '@/lib/diagnostics/restorationDiagnostics
  * operationGuard.ts) keyed on a stable ref in the caller, NOT on React
  * state this function itself sets -- that decoupling is the actual fix.
  */
+export type AccountIntent = 'createAccount' | 'signIn';
+
 export type ResolveAccountOperationDeps = {
   classify?: typeof classifyProfileDiagnostic;
+  // Which button the user pressed on AccountChoiceScreen. Undefined only
+  // for capture/preview screens that skip account resolution entirely --
+  // every real resolution attempt has one. Governs ONLY the 'not_found'
+  // branch below: 'allow' always restores the existing account regardless
+  // of intent (an exact provider-identity match is never treated as an
+  // error), and intent never affects 'ambiguous'/'unavailable' (-> blocked).
+  intent?: AccountIntent;
   isStale: () => boolean;
   onBlocked: () => void;
   onNew: () => void;
@@ -28,6 +37,9 @@ export type ResolveAccountOperationDeps = {
   // if it is not stale -- the equivalent of the old `finally` block's
   // `setIsRestoreRetrying(false)`.
   onSettled: () => void;
+  // 'not_found' while intent === 'signIn': Sign In must never silently
+  // create a new account, so this is called instead of onNew.
+  onSignInNotFound: () => void;
   recordStage?: typeof recordRestorationStage;
   runDiagnostic: () => Promise<ProfileDiagnosticResult>;
   // Triggers refreshRestoration() (or an injected stand-in for tests) --
@@ -64,10 +76,18 @@ export async function runAccountResolutionOperation(
 
     const decision = classify(diagnostic);
     if (decision === 'allow') {
+      // An exact existing provider identity always restores the existing
+      // account -- deliberately ignores intent. Create Account against an
+      // identity that already has an account is not an error; Sign In
+      // against one is exactly the success case.
       deps.onReturning();
       deps.startRestoration();
     } else if (decision === 'not_found') {
-      deps.onNew();
+      if (deps.intent === 'signIn') {
+        deps.onSignInNotFound();
+      } else {
+        deps.onNew();
+      }
     } else {
       deps.onBlocked();
     }

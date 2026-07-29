@@ -154,10 +154,43 @@ test('a genuinely new (not_found) account never triggers hydration from a previo
   const newAccountBody = appIndex.slice(newAccountStart, newAccountEnd);
 
   assert.doesNotMatch(newAccountBody, /hydrateLocalProfileFromRestoration/);
-  assertIncludes(
-    accountResolutionOperation,
-    "} else if (decision === 'not_found') {\n      deps.onNew();",
+  assertIncludes(accountResolutionOperation, "} else if (decision === 'not_found') {");
+  assertIncludes(accountResolutionOperation, 'deps.onNew();');
+});
+
+test('Sign In never silently creates a new account: a "not_found" diagnostic with intent signIn is routed to onSignInNotFound, not onNew', () => {
+  assertOrder(accountResolutionOperation, [
+    "} else if (decision === 'not_found') {",
+    "if (deps.intent === 'signIn') {",
+    'deps.onSignInNotFound();',
+    '} else {',
+    'deps.onNew();',
+  ]);
+  // An exact existing provider identity always restores the existing
+  // account -- the 'allow' branch must never consult intent at all.
+  const allowStart = accountResolutionOperation.indexOf("if (decision === 'allow') {");
+  const allowEnd = accountResolutionOperation.indexOf(
+    "} else if (decision === 'not_found') {",
+    allowStart,
   );
+  assert.ok(allowStart > 0 && allowEnd > allowStart, 'Expected an allow branch before not_found');
+  assert.doesNotMatch(accountResolutionOperation.slice(allowStart, allowEnd), /deps\.intent/);
+});
+
+test('Account Choice runs before the provider sign-in screen and its choice is threaded into account resolution', () => {
+  assertOrder(appIndex, [
+    "if (!onboardingStatus.accountChoiceComplete) {",
+    '<AccountChoiceScreen',
+    "if (!onboardingStatus.authComplete) {",
+  ]);
+  assertIncludes(appIndex, "intent: accountIntent } : {}");
+  assertIncludes(appIndex, "onSignInNotFound: () => setAccountResolution('signInNotFound')");
+  assertIncludes(appIndex, '<SignInNotFoundScreen');
+});
+
+test('sign-out resets accountChoiceComplete and accountIntent, not just authComplete, so the next session goes through Account Choice again', () => {
+  assertIncludes(appIndex, 'accountChoiceComplete: false');
+  assertIncludes(appIndex, 'setAccountIntent(null);');
 });
 
 test('signing out fully unscopes the device from the previous Apple account before a new one can hydrate', () => {
@@ -435,6 +468,17 @@ test('the Immersive Journal world registry contains exactly the six required wor
   assert.equal(idCount, 6, 'Expected exactly six worlds in JOURNAL_WORLDS');
 });
 
+test('picking an immersive-journal world actually changes what is rendered: the writer shows the world\'s own background image, and the picker previews it, not just an accent-color tint', () => {
+  assertIncludes(journalScreen, 'source={{ uri: selectedWorld.backgroundImage }}');
+  assertIncludes(journalScreen, 'source={{ uri: world.backgroundImage }}');
+});
+
+test('Family Access verification is a testable, honest result-returning module -- never a thrown error the UI could accidentally treat as success', () => {
+  assertIncludes(settingsScreen, "import { verifyFamilyAccess } from '@/lib/family/familyAccess';");
+  assertIncludes(settingsScreen, 'const result = await verifyFamilyAccess(code);');
+  assert.doesNotMatch(settingsScreen, /action: 'activateFamily'/);
+});
+
 test('CHAT_BACKGROUNDS and IMMERSIVE_JOURNAL_WORLDS are two clear, separate registries', () => {
   assertIncludes(worldCatalog, 'export const CHAT_BACKGROUNDS: readonly WorldProfile[] = [');
   assertIncludes(worldCatalog, 'export const IMMERSIVE_JOURNAL_WORLDS: readonly WorldProfile[] = [');
@@ -517,6 +561,21 @@ test('settings, premium, and admin use shared back controls without global priva
     '<BackButton accessibilityLabel="Back to settings" onPress={onBack} />',
   );
   assert.doesNotMatch(settingsScreen, /label="Private session"/);
+});
+
+test('the Options grid (Customize/History/Worlds/...) is reachable only from Chat, not from Settings entered via Home', () => {
+  assertIncludes(
+    appIndex,
+    "initialView={settingsReturnTo === 'chat' ? 'options' : 'account'}",
+  );
+  assertIncludes(repairedSettingsScreen, "const initialView = props.initialView ?? 'options';");
+  assertIncludes(repairedSettingsScreen, "useState<SettingsView>(initialView)");
+  // When entered directly on 'account' there is no Options grid to fall
+  // back to -- back must exit Settings entirely, not reveal 'options'.
+  assertIncludes(
+    repairedSettingsScreen,
+    "const backToOptions = () => (initialView === 'options' ? setView('options') : props.onBack());",
+  );
 });
 
 test('chat options own relationship, tone, voice, private session, and current conversation controls', () => {

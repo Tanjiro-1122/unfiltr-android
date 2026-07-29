@@ -2,6 +2,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useCallback, useEffect, useState } from 'react';
 import {
   Image,
+  ImageBackground,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -491,11 +492,17 @@ function JournalWriter({
       style={styles.writerRoot}
     >
       {immersive ? (
-        <LinearGradient
-          colors={[selectedWorld.accent, '#0B0614', '#05020D']}
-          locations={[0, 0.38, 1]}
+        <ImageBackground
+          accessibilityIgnoresInvertColors
+          source={{ uri: selectedWorld.backgroundImage }}
           style={StyleSheet.absoluteFill}
-        />
+        >
+          <LinearGradient
+            colors={['rgba(0,0,0,0.1)', 'rgba(11,6,20,0.72)', 'rgba(5,2,13,0.94)']}
+            locations={[0, 0.42, 1]}
+            style={StyleSheet.absoluteFill}
+          />
+        </ImageBackground>
       ) : null}
       <View style={styles.writerHeader}>
         <BackButton onPress={onBack} />
@@ -627,8 +634,21 @@ function WorldPicker({
           onPress={() => onSelect(world)}
           style={[styles.worldCard, { borderColor: world.accent }]}
         >
-          <Text style={[styles.worldTitle, { color: world.accent }]}>{world.label}</Text>
-          <Text style={styles.worldDesc}>{world.desc}</Text>
+          <ImageBackground
+            accessibilityIgnoresInvertColors
+            imageStyle={styles.worldCardImage}
+            source={{ uri: world.backgroundImage }}
+            style={styles.worldCardImageWrap}
+          >
+            <LinearGradient
+              colors={['rgba(0,0,0,0.05)', 'rgba(0,0,0,0.55)']}
+              style={styles.worldCardOverlay}
+            >
+              <Text style={styles.worldMark}>{world.mark}</Text>
+              <Text style={[styles.worldTitle, { color: world.accent }]}>{world.label}</Text>
+              <Text style={styles.worldDesc}>{world.desc}</Text>
+            </LinearGradient>
+          </ImageBackground>
         </Pressable>
       ))}
     </ScrollView>
@@ -1018,10 +1038,14 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     borderWidth: 1,
     marginBottom: 14,
-    minHeight: 106,
-    padding: 20,
+    minHeight: 130,
+    overflow: 'hidden',
   },
-  worldDesc: { color: 'rgba(255,255,255,0.62)', fontSize: 13, marginTop: 6 },
+  worldCardImage: { borderRadius: 22 },
+  worldCardImageWrap: { minHeight: 130 },
+  worldCardOverlay: { flex: 1, justifyContent: 'flex-end', padding: 20 },
+  worldMark: { fontSize: 22, marginBottom: 4 },
+  worldDesc: { color: 'rgba(255,255,255,0.82)', fontSize: 13, marginTop: 6 },
   worldTitle: { fontSize: 19, fontWeight: '900' },
   writerContent: { paddingHorizontal: 20, paddingTop: 18 },
   writerHeader: {

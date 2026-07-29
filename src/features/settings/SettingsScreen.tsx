@@ -18,7 +18,8 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { BackButton } from '@/components/BackButton';
 import { getCompanionMeta, type CompanionId } from '@/features/onboarding/companionQuiz';
 import { verifyAdminAccess } from '@/lib/admin/adminAccess';
-import { apiClient, ApiError } from '@/lib/api';
+import { apiClient } from '@/lib/api';
+import { verifyFamilyAccess } from '@/lib/family/familyAccess';
 import { resolvePremiumAccess } from '@/lib/purchases/access';
 import { refreshRestoration } from '@/lib/restoration/restorationStore';
 import {
@@ -44,17 +45,6 @@ type ProfileSyncResponse = {
       relationshipMode?: RelationshipMode;
       voicePersonality?: string;
     } | null;
-  } | null;
-};
-
-type FamilyActivationResponse = {
-  activated?: boolean;
-  tier?: string;
-  profile?: {
-    id?: string | null;
-    is_family?: boolean | null;
-    is_premium?: boolean | null;
-    tier?: string | null;
   } | null;
 };
 
@@ -262,12 +252,9 @@ export function SettingsScreen({
     setAccessError('');
     try {
       if (accessModal === 'family') {
-        const response = await apiClient.post<FamilyActivationResponse>('/api/profile', {
-          action: 'activateFamily',
-          code,
-        });
-        if (!isVerifiedFamilyActivation(response)) {
-          setAccessError('Family access was not confirmed by the server.');
+        const result = await verifyFamilyAccess(code);
+        if (!result.ok) {
+          setAccessError(result.message);
           return;
         }
         await Promise.all([
@@ -295,18 +282,11 @@ export function SettingsScreen({
       setAccessModal(null);
       setAccessCode('');
       setStatus('Admin access confirmed. Open Options to enter the Admin Dashboard.');
-    } catch (error) {
-      if (error instanceof ApiError && error.status === 400) {
-        setAccessError('Enter a valid code.');
-      } else if (error instanceof ApiError && error.status === 401) {
-        setAccessError('Sign in with Apple again before activating family access.');
-      } else if (error instanceof ApiError && error.status === 403) {
-        setAccessError('Invalid code.');
-      } else if (error instanceof ApiError && error.status === 503) {
-        setAccessError('Family access is not configured on the server yet.');
-      } else {
-        setAccessError('Could not reach the access server. Check the API URL and try again.');
-      }
+    } catch {
+      // verifyFamilyAccess/verifyAdminAccess both catch their own network
+      // and ApiError failures and return a result object -- this only
+      // catches something unexpected in the surrounding state updates.
+      setAccessError('Could not reach the access server. Check the API URL and try again.');
     } finally {
       setVerifyingAccess(false);
     }
@@ -693,15 +673,6 @@ function resolveRelationshipMode(value: string | null): RelationshipMode {
 
 function capitalize(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
-function isVerifiedFamilyActivation(response: FamilyActivationResponse): boolean {
-  return (
-    response.activated === true &&
-    response.tier === 'family' &&
-    response.profile?.is_family === true &&
-    response.profile?.is_premium === true
-  );
 }
 
 const styles = StyleSheet.create({

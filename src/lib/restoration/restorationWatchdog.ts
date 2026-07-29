@@ -1,4 +1,10 @@
-export type WatchdogAccountResolution = 'blocked' | 'new' | 'pending' | 'returning' | null;
+export type WatchdogAccountResolution =
+  | 'blocked'
+  | 'new'
+  | 'pending'
+  | 'returning'
+  | 'signInNotFound'
+  | null;
 export type WatchdogRestorationStatus = 'idle' | 'loading' | 'ready';
 
 export type ResolvingSnapshot = {

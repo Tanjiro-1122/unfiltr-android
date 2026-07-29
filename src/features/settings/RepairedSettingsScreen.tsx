@@ -23,6 +23,12 @@ type RepairedSettingsScreenProps = {
   onSignOut?: () => void;
   onOpenNotifications: () => void;
   onOpenPremium: () => void;
+  // 'options' lands on the Customize/History/Worlds/... grid (Chat's own
+  // gear icon); 'account' skips straight to account/privacy settings
+  // (Settings entered from Home) -- see app/index.tsx. Defaults to
+  // 'options' to preserve existing behavior for any caller that doesn't
+  // pass it.
+  initialView?: 'account' | 'options';
 };
 type SettingsView =
   | 'options'
@@ -40,8 +46,9 @@ type SettingsView =
   | 'worlds';
 
 export function SettingsScreen(props: RepairedSettingsScreenProps) {
+  const initialView = props.initialView ?? 'options';
   const [adminOpen, setAdminOpen] = useState(false);
-  const [view, setView] = useState<SettingsView>('options');
+  const [view, setView] = useState<SettingsView>(initialView);
   const [codeModalOpen, setCodeModalOpen] = useState(false);
   const [ownerCode, setOwnerCode] = useState('');
   const [error, setError] = useState('');
@@ -95,7 +102,10 @@ export function SettingsScreen(props: RepairedSettingsScreenProps) {
     setAdminOpen(false);
   }
 
-  const backToOptions = () => setView('options');
+  // When entered directly on 'account' (Settings from Home), there is no
+  // Options grid to fall back to -- go all the way out instead of showing a
+  // screen this entry point should never reach.
+  const backToOptions = () => (initialView === 'options' ? setView('options') : props.onBack());
   if (view === 'customize') return <CustomizeCompanionScreen onBack={backToOptions} />;
   if (view === 'badges') return <BadgesScreen onBack={backToOptions} />;
   if (view === 'diagnostics')

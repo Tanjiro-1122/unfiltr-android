@@ -9,7 +9,7 @@ import {
 } from 'react';
 import { ActivityIndicator, Platform, StyleSheet, Text, View } from 'react-native';
 
-import { AccountRestoreErrorScreen } from '@/features/accountRecovery';
+import { AccountRestoreErrorScreen, SignInNotFoundScreen } from '@/features/accountRecovery';
 import { AdminDashboardScreen } from '@/features/admin';
 import { ChatScreen, type ChatMessage } from '@/features/chat';
 import { HomeScreen } from '@/features/home';
@@ -17,6 +17,7 @@ import { JournalScreen } from '@/features/journal';
 import { MeditationScreen } from '@/features/meditation';
 import { MemoryScreen } from '@/features/memory/MemoryScreen';
 import { NotificationsScreen } from '@/features/notifications';
+import { AccountChoiceScreen, type AccountIntent } from '@/features/onboarding/accountChoice';
 import { AgeGateScreen } from '@/features/onboarding/ageGate';
 import { AppleSignInScreen } from '@/features/onboarding/appleSignIn';
 import { CompanionNamingScreen } from '@/features/onboarding/companionNaming';
@@ -66,9 +67,10 @@ import { signOutGoogleAndroid } from '@/platform/android/googleAuth';
  *  - 'blocked'   diagnostic was ambiguous/unavailable, or restoration ultimately
  *                failed with no usable cache -> show AccountRestoreErrorScreen
  */
-type AccountResolution = 'blocked' | 'new' | 'pending' | 'returning';
+type AccountResolution = 'blocked' | 'new' | 'pending' | 'returning' | 'signInNotFound';
 
 type OnboardingStatus = {
+  accountChoiceComplete: boolean;
   ageGateComplete: boolean;
   authComplete: boolean;
   companionNamingComplete: boolean;
@@ -104,6 +106,7 @@ const RESTORATION_WAIT_TIMEOUT_MS = 20000;
 const OUTER_RESTORATION_WATCHDOG_MS = 30000;
 
 const initialOnboardingStatus: OnboardingStatus = {
+  accountChoiceComplete: false,
   ageGateComplete: false,
   authComplete: false,
   companionNamingComplete: false,
@@ -237,6 +240,7 @@ function captureStatus(screen: string): {
   resolution: AccountResolution | null;
 } {
   const baseComplete: OnboardingStatus = {
+    accountChoiceComplete: true,
     ageGateComplete: true,
     authComplete: true,
     companionNamingComplete: false,
@@ -432,6 +436,11 @@ export default function FoundationScreen() {
   const [accountResolution, setAccountResolution] = useState<AccountResolution | null>(
     () => initialCapture?.resolution ?? null,
   );
+  // Set once on AccountChoiceScreen and never touched again until sign-out.
+  // Governs only what a 'not_found' diagnostic means (see
+  // accountResolutionOperation.ts) -- an exact existing provider identity
+  // always restores the existing account regardless of this value.
+  const [accountIntent, setAccountIntent] = useState<AccountIntent | null>(null);
   const [statusLoaded, setStatusLoaded] = useState(bypassSplash);
   const handledResponseId = useRef<string | null>(null);
   const hydratedAccountIdRef = useRef<string | null>(null);
@@ -554,6 +563,7 @@ export default function FoundationScreen() {
     const operationId = resolveAccountOperationGuardRef.current.begin();
 
     void runAccountResolutionOperation({
+      ...(accountIntent ? { intent: accountIntent } : {}),
       isStale: () => resolveAccountOperationGuardRef.current.isStale(operationId),
       onBlocked: () => setAccountResolution('blocked'),
       onNew: () => setAccountResolution('new'),
@@ -568,12 +578,15 @@ export default function FoundationScreen() {
       },
       onReturning: () => setAccountResolution('returning'),
       onSettled: () => setIsRestoreRetrying(false),
+      // Sign In must never silently create a new account -- see
+      // accountResolutionOperation.ts and SignInNotFoundScreen.
+      onSignInNotFound: () => setAccountResolution('signInNotFound'),
       runDiagnostic: () => withTimeout(runProfileDiagnostic(), ACCOUNT_LOOKUP_TIMEOUT_MS),
       startRestoration: () => void refreshRestoration(),
     });
 
     return undefined;
-  }, [accountResolution, onboardingStatus.authComplete, statusLoaded]);
+  }, [accountIntent, accountResolution, onboardingStatus.authComplete, statusLoaded]);
 
   // Once restoration finishes for a returning account, hydrate the legacy
   // per-screen storage keys and detect a total restoration failure (no
@@ -654,6 +667,36 @@ export default function FoundationScreen() {
     setIsRestoreRetrying(false);
     hydratedAccountIdRef.current = null;
     void handleSignOut({
+      setAccountIntent,
+      setAccountResolution,
+      setActiveScreen,
+      setChatMessages,
+      setOnboardingStatus,
+      setPremiumReturnTo,
+      setSettingsReturnTo,
+      setStartupAuthStatus,
+    });
+  }
+
+  // Switches intent to Create Account against the SAME already-authenticated
+  // provider identity and re-triggers resolution (accountResolution -> null
+  // re-runs the effect above with a fresh operation id). If that identity
+  // already has an account, the 'allow' branch restores it regardless of
+  // this intent -- this only actually starts new-account onboarding when
+  // the diagnostic is still 'not_found'.
+  function createAccountInsteadOfSignIn() {
+    setAccountIntent('createAccount');
+    setAccountResolution(null);
+  }
+
+  // A different provider identity is needed, so this is a real sign-out
+  // (provider session, tokens, and cache all cleared) rather than just a
+  // state reset -- otherwise a subsequent "Sign In" would silently re-run
+  // the diagnostic against the same identity that just failed.
+  function tryDifferentAccountAfterSignInNotFound() {
+    hydratedAccountIdRef.current = null;
+    void handleSignOut({
+      setAccountIntent,
       setAccountResolution,
       setActiveScreen,
       setChatMessages,
@@ -724,6 +767,22 @@ export default function FoundationScreen() {
     );
   }
 
+  // Sign In vs Create Account, captured before the provider sign-in screen
+  // so accountResolutionOperation.ts knows what a 'not_found' diagnostic
+  // should mean once auth completes (see accountIntent above).
+  if (!onboardingStatus.accountChoiceComplete) {
+    return (
+      <ScreenFrame showCenterGuide={showCenterGuide}>
+        <AccountChoiceScreen
+          onChoose={(intent) => {
+            setAccountIntent(intent);
+            setOnboardingStatus((current) => ({ ...current, accountChoiceComplete: true }));
+          }}
+        />
+      </ScreenFrame>
+    );
+  }
+
   if (!onboardingStatus.authComplete) {
     const signInInitialError =
       startupAuthStatus === 'offline'
@@ -747,6 +806,20 @@ export default function FoundationScreen() {
             onAuthenticated={handleAuthenticated}
           />
         )}
+      </ScreenFrame>
+    );
+  }
+
+  // Sign In against a provider identity with no existing account -- never
+  // falls through to new-account onboarding on its own; see
+  // accountResolutionOperation.ts and SignInNotFoundScreen.
+  if (accountResolution === 'signInNotFound') {
+    return (
+      <ScreenFrame showCenterGuide={showCenterGuide}>
+        <SignInNotFoundScreen
+          onCreateAccountInstead={createAccountInsteadOfSignIn}
+          onTryDifferentAccount={tryDifferentAccountAfterSignInNotFound}
+        />
       </ScreenFrame>
     );
   }
@@ -1032,10 +1105,17 @@ export default function FoundationScreen() {
     return (
       <ScreenFrame showCenterGuide={showCenterGuide}>
         <SettingsScreen
+          // The Options grid (Customize/History/Worlds/Topics/Mood/Capsule/
+          // Sleep/Games/Badges/Saved) stays reachable only from Chat's own
+          // gear icon (settingsReturnTo === 'chat'); Settings entered from
+          // Home goes straight to account/privacy settings. See
+          // RepairedSettingsScreen's initialView prop.
+          initialView={settingsReturnTo === 'chat' ? 'options' : 'account'}
           onBack={() => setActiveScreen(captureSettings ? 'home' : settingsReturnTo)}
           onSignOut={() => {
             hydratedAccountIdRef.current = null;
             void handleSignOut({
+              setAccountIntent,
               setAccountResolution,
               setActiveScreen,
               setChatMessages,
@@ -1091,6 +1171,7 @@ export default function FoundationScreen() {
  * resolution effects above) rather than trusted from stale local state.
  */
 async function handleSignOut({
+  setAccountIntent,
   setAccountResolution,
   setActiveScreen,
   setChatMessages,
@@ -1099,6 +1180,7 @@ async function handleSignOut({
   setSettingsReturnTo,
   setStartupAuthStatus,
 }: {
+  setAccountIntent: Dispatch<SetStateAction<AccountIntent | null>>;
   setAccountResolution: Dispatch<SetStateAction<AccountResolution | null>>;
   setActiveScreen: (screen: AppScreen) => void;
   setChatMessages: Dispatch<SetStateAction<ChatMessage[]>>;
@@ -1132,13 +1214,16 @@ async function handleSignOut({
   setPremiumReturnTo('home');
   setChatMessages([]);
 
-  // 4-7. Return to Age Gate, then Policy Consent, then platform Sign-In --
-  // initialOnboardingStatus has ageGateComplete/privacyConsentComplete/
-  // authComplete all false, and accountResolution(null) means the next
-  // completed auth is checked against the backend from scratch before any
-  // onboarding screen is skipped.
+  // 4-7. Return to Age Gate, then Policy Consent, then Account Choice, then
+  // platform Sign-In -- initialOnboardingStatus has ageGateComplete/
+  // privacyConsentComplete/accountChoiceComplete/authComplete all false, so
+  // the next sign-in must go through Account Choice again rather than
+  // reusing the prior Sign In/Create Account intent, and accountResolution
+  // (null) means the next completed auth is checked against the backend
+  // from scratch before any onboarding screen is skipped.
   setStartupAuthStatus('unauthenticated');
   setAccountResolution(null);
+  setAccountIntent(null);
   setOnboardingStatus(initialOnboardingStatus);
 }
 

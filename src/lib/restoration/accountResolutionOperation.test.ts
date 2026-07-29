@@ -62,6 +62,7 @@ function baseDeps(overrides: Partial<Parameters<typeof runAccountResolutionOpera
     onPending: vi.fn(),
     onReturning: vi.fn(),
     onSettled: vi.fn(),
+    onSignInNotFound: vi.fn(),
     recordStage: vi.fn(),
     runDiagnostic: vi.fn(async () => foundDiagnostic()),
     startRestoration: vi.fn(),
@@ -94,7 +95,7 @@ describe('runAccountResolutionOperation', () => {
     expect(deps.onBlocked).not.toHaveBeenCalled();
   });
 
-  it('a successful diagnostic with status "not_found" classifies as new and never calls startRestoration', async () => {
+  it('a successful diagnostic with status "not_found" classifies as new and never calls startRestoration when intent is createAccount (or unset)', async () => {
     const deps = baseDeps({ runDiagnostic: vi.fn(async () => notFoundDiagnostic()) });
 
     await runAccountResolutionOperation(deps);
@@ -102,6 +103,44 @@ describe('runAccountResolutionOperation', () => {
     expect(deps.onNew).toHaveBeenCalledTimes(1);
     expect(deps.startRestoration).not.toHaveBeenCalled();
     expect(deps.onReturning).not.toHaveBeenCalled();
+    expect(deps.onSignInNotFound).not.toHaveBeenCalled();
+  });
+
+  it('Sign In must never silently create a new account: "not_found" with intent signIn calls onSignInNotFound, never onNew', async () => {
+    const deps = baseDeps({
+      intent: 'signIn',
+      runDiagnostic: vi.fn(async () => notFoundDiagnostic()),
+    });
+
+    await runAccountResolutionOperation(deps);
+
+    expect(deps.onSignInNotFound).toHaveBeenCalledTimes(1);
+    expect(deps.onNew).not.toHaveBeenCalled();
+    expect(deps.startRestoration).not.toHaveBeenCalled();
+    expect(deps.onSettled).toHaveBeenCalledTimes(1);
+  });
+
+  it('an exact existing provider identity always restores the existing account, even when intent is signIn', async () => {
+    const deps = baseDeps({ intent: 'signIn', runDiagnostic: vi.fn(async () => foundDiagnostic()) });
+
+    await runAccountResolutionOperation(deps);
+
+    expect(deps.onReturning).toHaveBeenCalledTimes(1);
+    expect(deps.startRestoration).toHaveBeenCalledTimes(1);
+    expect(deps.onSignInNotFound).not.toHaveBeenCalled();
+    expect(deps.onNew).not.toHaveBeenCalled();
+  });
+
+  it('Create Account against an identity that already has an account restores it rather than erroring', async () => {
+    const deps = baseDeps({
+      intent: 'createAccount',
+      runDiagnostic: vi.fn(async () => foundDiagnostic()),
+    });
+
+    await runAccountResolutionOperation(deps);
+
+    expect(deps.onReturning).toHaveBeenCalledTimes(1);
+    expect(deps.onNew).not.toHaveBeenCalled();
   });
 
   it('stale/old operation results are ignored: a slow operation superseded by a newer one never fires any of its callbacks', async () => {
