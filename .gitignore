@@ -15,3 +15,18 @@ yarn.lock
 credentials.json
 credentials/
 .idea/
+
+# android/ is untracked entirely (Expo CNG regenerates it from app.json),
+# but if it's ever committed, none of these should go with it: they all
+# bake in machine-specific absolute paths (a Windows "C:\dev\..." path on
+# this machine breaks a Linux EAS builder, and vice versa), and the .cxx/
+# CMake caches and hs_err_pid crash dumps are pure local-build noise.
+android/.cxx/
+android/.gradle/
+android/build/
+android/app/build/
+android/app/.cxx/
+android/local.properties
+**/android/.cxx/
+hs_err_pid*.log
+replay_pid*.log
