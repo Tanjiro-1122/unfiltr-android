@@ -1,0 +1,43 @@
+node_modules/
+.expo/
+dist/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+web-build/
+.env
+google-play-service-account.json
+yarn.lock
+
+credentials.json
+credentials/
+.idea/
+
+# android/ is untracked entirely (Expo CNG regenerates it from app.json),
+# but if it's ever committed, none of these should go with it: they all
+# bake in machine-specific absolute paths (a Windows "C:\dev\..." path on
+# this machine breaks a Linux EAS builder, and vice versa), and the .cxx/
+# CMake caches and hs_err_pid crash dumps are pure local-build noise.
+android/.cxx/
+android/.gradle/
+android/build/
+android/app/build/
+android/app/.cxx/
+android/local.properties
+**/android/.cxx/
+hs_err_pid*.log
+replay_pid*.log
+
+# EAS Build archives and uploads the local project directory as-is (it
+# does not clone a clean checkout from GitHub for this command) --
+# .gitignore alone does not control what goes into that archive. This
+# locally-generated native project (with this machine's absolute paths
+# baked into local.properties, .cxx caches, etc.) must never be part of
+# the upload: EAS must always perform its own clean Linux prebuild from
+# app.json, the same way it did for the versionCode 24 build that
+# succeeded before this android/ directory existed locally.
+/android
+/ios
