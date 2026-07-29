@@ -136,17 +136,21 @@ export function GoogleSignInScreen({ initialError, onAuthenticated }: GoogleSign
         setError('Google Play Services is unavailable or needs an update.');
         return;
       }
+      if (cause instanceof AndroidGoogleAuthError && cause.code === 'developer_error') {
+        // Not transient -- the calling app's package name + signing
+        // certificate SHA-1 don't match any Android OAuth client
+        // registered in Google Cloud Console for this project. Retrying
+        // never fixes this; it needs a config/console change.
+        recordRestorationStage('auth-failed', 'developer_error');
+        setError('Google Sign In is not configured for this build. (DEVELOPER_ERROR)');
+        return;
+      }
 
-      // Previously silent (see the handoff's Section 4 finding): logs the
-      // native SDK error via the same safe, release-visible mechanism used
-      // elsewhere in this file -- a bucketed enum code only (cancelled/
-      // in_progress/play_services_unavailable/unknown), never cause.message
-      // or the raw native error object, which could in principle echo back
-      // account data from the SDK. A DEVELOPER_ERROR-class code here (not
-      // distinguishable from 'unknown' at this level, but worth checking
-      // first) usually means the Android OAuth client's SHA-1/package name
-      // is misconfigured in Google Cloud Console for whatever keystore
-      // signed this build.
+      // Logs the native SDK error via the same safe, release-visible
+      // mechanism used elsewhere in this file -- a bucketed enum code only
+      // (cancelled/in_progress/play_services_unavailable/developer_error/
+      // unknown), never cause.message or the raw native error object,
+      // which could in principle echo back account data from the SDK.
       const bucketedCode = cause instanceof AndroidGoogleAuthError ? cause.code : 'unknown';
       recordRestorationStage('auth-failed', bucketedCode);
       setError(`Google Sign In failed. Please try again. (${bucketedCode})`);

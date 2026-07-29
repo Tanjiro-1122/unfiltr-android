@@ -18,7 +18,18 @@ export type AndroidGoogleAuthErrorCode =
   | 'cancelled'
   | 'in_progress'
   | 'play_services_unavailable'
+  | 'developer_error'
   | 'unknown';
+
+// GoogleSignInStatusCodes.DEVELOPER_ERROR (== the underlying Play Services
+// CommonStatusCodes value 10). Not exported by this library's own
+// `statusCodes` object (see errorCodes.ts -- it only wraps SIGN_IN_CANCELLED,
+// IN_PROGRESS, PLAY_SERVICES_NOT_AVAILABLE, SIGN_IN_REQUIRED), so it has to
+// be matched on the raw numeric-as-string code the native module actually
+// sends: ErrorDto.kt sets `this.code = codeInt.toString()` for any
+// ApiException, meaning this arrives as the literal string "10", not a
+// named constant.
+const GOOGLE_PLAY_SERVICES_DEVELOPER_ERROR_CODE = '10';
 
 export class AndroidGoogleAuthError extends Error {
   constructor(
@@ -99,6 +110,18 @@ function normalizeGoogleAuthError(error: unknown): AndroidGoogleAuthError {
     return new AndroidGoogleAuthError(
       'play_services_unavailable',
       'Google Play Services is unavailable or needs an update.',
+      { cause: error },
+    );
+  }
+  if (candidate?.code === GOOGLE_PLAY_SERVICES_DEVELOPER_ERROR_CODE) {
+    // Means the calling app's package name + signing certificate SHA-1
+    // don't match any Android OAuth client registered for this project in
+    // Google Cloud Console -- never a transient condition, and never
+    // something retrying fixes. Safe to state plainly: this code is a
+    // Google Play Services status constant, not account data.
+    return new AndroidGoogleAuthError(
+      'developer_error',
+      'Google Sign In is not configured correctly for this build.',
       { cause: error },
     );
   }
