@@ -193,6 +193,76 @@ test('sign-out resets accountChoiceComplete and accountIntent, not just authComp
   assertIncludes(appIndex, 'setAccountIntent(null);');
 });
 
+test('Apple Sign-In never appears on Android: the platform switch is unconditional and Account Choice does not gate or replace it', () => {
+  const authBlockStart = appIndex.indexOf('if (!onboardingStatus.authComplete) {');
+  assert.ok(authBlockStart > 0, 'Expected the auth-screen block to exist');
+  const authBlockEnd = appIndex.indexOf('\n  }', appIndex.indexOf('<ScreenFrame', authBlockStart));
+  const authBlock = appIndex.slice(authBlockStart, authBlockEnd);
+
+  assertOrder(authBlock, [
+    "Platform.OS === 'android'",
+    '<GoogleSignInScreen',
+    ') : (',
+    '<AppleSignInScreen',
+  ]);
+  // No new condition (accountIntent, accountChoice, or otherwise) wraps or
+  // replaces the Platform.OS check itself -- Account Choice only decides
+  // WHETHER this block is reached (via accountChoiceComplete, checked
+  // strictly before it), never WHICH branch inside it renders.
+  assert.doesNotMatch(authBlock, /accountIntent/);
+  assert.doesNotMatch(authBlock, /accountChoice/i);
+});
+
+test('restoration never stays pending after a successful "allow" diagnostic: onReturning/startRestoration fire unconditionally, before any intent check', () => {
+  const allowConditionStart = accountResolutionOperation.indexOf("if (decision === 'allow') {");
+  const allowStart = accountResolutionOperation.indexOf('{', allowConditionStart) + 1;
+  const allowEnd = accountResolutionOperation.indexOf(
+    "} else if (decision === 'not_found') {",
+    allowStart,
+  );
+  assert.ok(allowConditionStart > 0 && allowEnd > allowStart, 'Expected an allow branch before not_found');
+  const allowBody = accountResolutionOperation.slice(allowStart, allowEnd);
+
+  assertOrder(allowBody, ['deps.onReturning();', 'deps.startRestoration();']);
+  // Confirmed already above (line ~177) that this branch never reads
+  // deps.intent at all -- restated here as its own named regression test
+  // so a future change that adds a conditional here fails loudly under
+  // exactly this description, not just an incidental adjacent assertion.
+  // The body here is ONLY the branch's contents (opening `{` already
+  // excluded), so a bare `if (` inside it means a new nested condition.
+  assert.doesNotMatch(allowBody, /deps\.intent|if \(/);
+});
+
+test('Account Choice never invalidates an active restoration operation: its onChoose handler and every accountIntent setter are wired independently of resolveAccountOperationGuardRef', () => {
+  const choiceScreenStart = appIndex.indexOf('<AccountChoiceScreen');
+  const choiceScreenEnd = appIndex.indexOf('/>', choiceScreenStart);
+  const choiceScreenBlock = appIndex.slice(choiceScreenStart, choiceScreenEnd);
+  assert.doesNotMatch(choiceScreenBlock, /resolveAccountOperationGuardRef|invalidate\(\)/);
+
+  // The ONLY two places allowed to call guard.invalidate() are: a real
+  // component unmount (the dedicated effect with an empty dependency
+  // array), and nowhere else -- confirmed by counting occurrences of
+  // `.invalidate()` in the whole file.
+  const invalidateCallCount = (appIndex.match(/guard\.invalidate\(\)/g) ?? []).length;
+  assert.equal(invalidateCallCount, 1, 'Expected exactly one guard.invalidate() call site (the unmount effect)');
+});
+
+test('two restoration operations never run simultaneously: the resolve effect only ever starts a new one while accountResolution is null, checked before begin()', () => {
+  const effectStart = appIndex.indexOf('if (!statusLoaded) return undefined;');
+  assert.ok(effectStart > 0, 'Expected the resolve-account effect to exist');
+  const effectEnd = appIndex.indexOf('void runAccountResolutionOperation', effectStart);
+  const effectGuardBody = appIndex.slice(effectStart, effectEnd);
+
+  assertOrder(effectGuardBody, [
+    'if (accountResolution !== null) return undefined;',
+    'resolveAccountOperationGuardRef.current.begin()',
+  ]);
+  // isStale() is threaded through so even if this guard were somehow
+  // bypassed, a second operation's callbacks would still be suppressed --
+  // defense in depth, not the only thing preventing concurrency.
+  assertIncludes(appIndex, 'isStale: () => resolveAccountOperationGuardRef.current.isStale(operationId)');
+});
+
 test('signing out fully unscopes the device from the previous Apple account before a new one can hydrate', () => {
   // Every field hydrateLocalProfile.ts can write must have a matching clear
   // on sign-out, or a second account signing in on the same device could

@@ -1,4 +1,3 @@
-import Constants from 'expo-constants';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -19,6 +18,7 @@ import { BackButton } from '@/components/BackButton';
 import { getCompanionMeta, type CompanionId } from '@/features/onboarding/companionQuiz';
 import { verifyAdminAccess } from '@/lib/admin/adminAccess';
 import { apiClient } from '@/lib/api';
+import { getBuildLabel } from '@/lib/build/buildInfo';
 import { verifyFamilyAccess } from '@/lib/family/familyAccess';
 import { resolvePremiumAccess } from '@/lib/purchases/access';
 import { refreshRestoration } from '@/lib/restoration/restorationStore';
@@ -52,8 +52,6 @@ const VOICES = ['warm', 'soft', 'playful', 'calm'];
 const RELATIONSHIP_MODES: RelationshipMode[] = ['friend', 'coach', 'companion'];
 const PRIVACY_POLICY_URL = 'https://unfiltrbyjavier2.vercel.app/PrivacyPolicy';
 const TERMS_OF_SERVICE_URL = 'https://unfiltrbyjavier2.vercel.app/TermsOfUse';
-const APP_VERSION = Constants.expoConfig?.version || '2.1.0';
-const APP_BUILD = Constants.expoConfig?.ios?.buildNumber || '64';
 
 export function SettingsScreen({
   onBack,
@@ -512,9 +510,7 @@ export function SettingsScreen({
               accessibilityRole="button"
               onPress={() => registerHiddenTap('admin')}
             >
-              <Text style={styles.versionText}>
-                Unfiltr Native · Version {APP_VERSION} ({APP_BUILD})
-              </Text>
+              <Text style={styles.versionText}>Unfiltr Native · {getBuildLabel()}</Text>
             </Pressable>
           </View>
 

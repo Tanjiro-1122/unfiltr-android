@@ -44,6 +44,7 @@ import { createOperationGuard } from '@/lib/async/operationGuard';
 import { withTimeout } from '@/lib/async/withTimeout';
 import { clearAuthenticatedSession, clearRememberedAccountIdentity } from '@/lib/auth/session';
 import { restoreStartupAuthSession, type StartupAuthStatus } from '@/lib/auth/startup';
+import { getBuildLabel } from '@/lib/build/buildInfo';
 import { recordRestorationStage } from '@/lib/diagnostics/restorationDiagnostics';
 import { useAndroidBackHandler } from '@/lib/navigation/useAndroidBackHandler';
 import { signOutRevenueCat } from '@/lib/purchases/revenueCat';
@@ -231,6 +232,11 @@ function AccountResolvingView() {
     <View style={styles.resolvingRoot}>
       <ActivityIndicator color="#C084FC" size="large" />
       <Text style={styles.resolvingText}>Loading your Unfiltr account.</Text>
+      {/* Deliberately visible on the exact screen a restoration hang would
+          be reported from -- a physical-device bug report is otherwise
+          unverifiable against which commit/versionCode was actually
+          installed. See src/lib/build/buildInfo.ts. */}
+      <Text style={styles.buildLabel}>{getBuildLabel()}</Text>
     </View>
   );
 }
@@ -1324,5 +1330,11 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.62)',
     fontSize: 14,
     fontWeight: '600',
+  },
+  buildLabel: {
+    color: 'rgba(255,255,255,0.28)',
+    fontSize: 11,
+    fontWeight: '500',
+    marginTop: 18,
   },
 });
